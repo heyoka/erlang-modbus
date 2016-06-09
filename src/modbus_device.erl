@@ -8,7 +8,7 @@
 
 -export([handle_call/3,handle_cast/2,handle_info/2,code_change/3,terminate/2]).
 -export([connect/5,disconnect/1,init/1]).
--export([read_hreg/2,read_hreg/3,read_ireg/2,read_ireg/3,write_hreg/3]).
+-export([read_hreg/3,read_hreg/4,read_ireg/3,read_ireg/4,write_hreg/3]).
 
 -include("modbus.hrl").
 -behavior(gen_server).
@@ -21,17 +21,17 @@ connect(Name, Type, Host, Port, DeviceAddr) ->
 disconnect(Name) -> gen_server:call(Name, stop).
 
 %% @doc Read from a holding register.
-read_hreg(Device, Offset) ->
-	gen_server:call(Device, {read_hreg_16, Offset}).
+read_hreg(Device, Start, Offset) ->
+	gen_server:call(Device, {read_hreg_16, Start, Offset}).
 %% @doc Read from a holding register, with optional conversion function of data when finished.
-read_hreg(Device,Offset,Fun) ->
-	Value = read_hreg(Device,Offset),
+read_hreg(Device,Start, Offset,Fun) ->
+	Value = read_hreg(Device,Start, Offset),
 	Fun(Value).
 
-read_ireg(Device, Offset) ->
-	gen_server:call(Device, {read_ireg_16, Offset}).
-read_ireg(Device,Offset,Fun) ->
-	Value = read_ireg(Device,Offset),
+read_ireg(Device, Start, Offset) ->
+	gen_server:call(Device, {read_ireg_16, Start, Offset}).
+read_ireg(Device,Start, Offset,Fun) ->
+	Value = read_ireg(Device,Start, Offset),
 	Fun(Value).
 
 write_hreg(Device, Offset, Value) ->
@@ -49,21 +49,21 @@ init([Type, Host, Port, DeviceAddr]) ->
 			{stop,{error,ErrorType}}
 	end.
 	
-handle_call({read_hreg_16, Offset}, _From, State) ->
-	Request = #rtu_request{address=State#modbus_state.device_address,function_code=?FC_READ_HREGS,start=Offset,data=1},
+handle_call({read_hreg_16, Start, Offset}, _From, State) ->
+	Request = #rtu_request{address=State#modbus_state.device_address,function_code=?FC_READ_HREGS,start=Start,data=Offset},
 	NewState = State#modbus_state{tid=State#modbus_state.tid + 1},
 	{ok, Data} = send_and_receive(NewState,Request),
 
-	[FinalData] = bytes_to_words(Data),
+	FinalData = bytes_to_words(Data),
 
 	{reply, FinalData, NewState, 5000};
 
-handle_call({read_ireg_16,Offset}, _From, State) ->
-	Request = #rtu_request{address=State#modbus_state.device_address,function_code=?FC_READ_IREGS,start=Offset,data=1},
+handle_call({read_ireg_16,Start, Offset}, _From, State) ->
+	Request = #rtu_request{address=State#modbus_state.device_address,function_code=?FC_READ_IREGS,start=Start,data=Offset},
 	NewState = State#modbus_state{tid=State#modbus_state.tid + 1},
 	{ok, Data} = send_and_receive(NewState,Request),
 
-	[FinalData] = bytes_to_words(Data),
+	FinalData = bytes_to_words(Data),
 
 	{reply, FinalData, NewState, 5000};
 
@@ -110,6 +110,8 @@ send_and_receive(State,Request) ->
 	{ok, _Data} = modbus:get_response_data(State,TheRequest).
 
 % Take a list of modbus bytes, and convert it to a list of words.
+bytes_to_words([],[Acc])->
+  Acc;  
 bytes_to_words([],Acc)->
   Acc;  
 bytes_to_words(Bytes,Acc) ->

@@ -15,7 +15,6 @@
 
 send_request_message(State,Request) ->
 	Message =  generate_request_message(Request),
-	io:format("~w~n",[Message]),
 	gen_tcp:send(State#modbus_state.sock,Message).
 
 generate_request_message(Request) when is_record(Request, tcp_request) ->
@@ -68,9 +67,6 @@ get_response_header(State, OriginalRequest) when is_record(OriginalRequest, rtu_
 	% Get RTU header (also encapsulated within TCP)
 	{ok, [Address, Code]} = gen_tcp:recv(State#modbus_state.sock,2,?TIMEOUT),
 
-	io:format("RH A: ~w~n",[Address]),
-	io:format("RH C: ~w~n",[Code]),
-
 	% validate the RTU header->
 	OrigAddress = OriginalRequest#rtu_request.address,	
 	OrigCode = OriginalRequest#rtu_request.function_code,
@@ -108,15 +104,12 @@ get_response_data(State, OriginalRequest) when is_record(OriginalRequest, rtu_re
 			ResponseChecksum = [OriginalRequest#rtu_request.address, OriginalRequest#rtu_request.function_code, Size]
 	end,
 
-	io:format("Size: ~w~n",[Size]),
 	{ok, Data} = gen_tcp:recv(State#modbus_state.sock, Size, ?TIMEOUT),
-	io:format("Data: ~w~n",[Data]),
 
 	% Get and validate the rtu checksum
 	case State#modbus_state.type of
 		rtu ->
 			{ok, Checksum} = gen_tcp:recv(State#modbus_state.sock, 2, ?TIMEOUT),
-			io:format("~w~n",[Checksum]),
 
 			{ok,_} = check_checksum(ResponseChecksum ++ Data ++ Checksum);
 		

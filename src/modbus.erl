@@ -39,6 +39,10 @@ generate_request_message(Request) when is_record(Request, tcp_request) ->
 
 generate_request_message(Request) when is_record(Request, rtu_request) ->
 	Message = case Request#rtu_request.function_code of 
+		?FC_READ_COILS ->
+			<<(Request#rtu_request.address):8, (Request#rtu_request.function_code):8, (Request#rtu_request.start):16,(Request#rtu_request.data):16>>; 
+		?FC_READ_INPUTS ->
+			<<(Request#rtu_request.address):8, (Request#rtu_request.function_code):8, (Request#rtu_request.start):16,(Request#rtu_request.data):16>>; 
 		?FC_READ_HREGS ->
 			<<(Request#rtu_request.address):8, (Request#rtu_request.function_code):8, (Request#rtu_request.start):16,(Request#rtu_request.data):16>>; 
 		?FC_READ_IREGS ->

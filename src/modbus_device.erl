@@ -7,18 +7,44 @@
 -author('Caleb Tennis <caleb.tennis@gmail.com>').
 
 -export([handle_call/3,handle_cast/2,handle_info/2,code_change/3,terminate/2]).
--export([connect/5,disconnect/1,init/1]).
+-export([connect/4, connect/5,disconnect/1,init/1]).
 -export([read_hreg/3,read_hreg/4,read_ireg/3,read_ireg/4,write_hreg/3]).
+-export([read_inputs/3, read_inputs/4, read_coils/3, read_coils/4]).
 
 -include("modbus.hrl").
 -behavior(gen_server).
 
 %% @spec connect(Name :: atom(), Type :: atom(), Host:: string(), Port :: integer (), DeviceAddress :: integer () ) -> ok
 %% @doc Connect to the remote TCP device
+connect(Type, Host, Port, DeviceAddr) ->
+	gen_server:start_link(modbus_device, [Type, Host, Port, DeviceAddr],[]).
+
 connect(Name, Type, Host, Port, DeviceAddr) ->
 	gen_server:start_link({local, Name}, modbus_device, [Type, Host, Port, DeviceAddr],[]).
 
 disconnect(Name) -> gen_server:call(Name, stop).
+
+%% @doc Read from a coil.
+read_coils(Device, Start, Offset) ->
+	Value = gen_server:call(Device, {read_coils, Start, Offset}),
+	case lists:split(Offset, Value) of
+		{[Result], _} -> Result;
+		{Result, _} -> Result
+	end.
+
+read_coils(Device, Start, Offset, Fun) ->
+	Value = gen_server:call(Device, {read_coils, Start, Offset}),
+	Fun(Value).
+%% @doc Read from a bit.
+read_inputs(Device, Start, Offset) ->
+	Value = gen_server:call(Device, {read_inputs, Start, Offset}),
+	case lists:split(Offset, Value) of
+		{[Result], _} -> Result;
+		{Result, _} -> Result
+	end.
+read_inputs(Device, Start, Offset, Fun) ->
+	Value = gen_server:call(Device, {read_inputs, Start, Offset}),
+	Fun(Value).
 
 %% @doc Read from a holding register.
 read_hreg(Device, Start, Offset) ->
@@ -48,7 +74,26 @@ init([Type, Host, Port, DeviceAddr]) ->
 		{error,ErrorType} ->
 			{stop,{error,ErrorType}}
 	end.
-	
+
+handle_call({read_coils, Start, Offset}, _From, State) ->
+	Request = #rtu_request{address=State#modbus_state.device_address,function_code=?FC_READ_COILS,start=Start,data=Offset},
+	NewState = State#modbus_state{tid=State#modbus_state.tid + 1},
+	{ok, Data} = send_and_receive(NewState,Request),
+
+	FinalData = bytes_to_bits(Data),
+
+	{reply, FinalData, NewState, 5000};
+
+handle_call({read_inputs, Start, Offset}, _From, State) ->
+	Request = #rtu_request{address=State#modbus_state.device_address,function_code=?FC_READ_INPUTS,start=Start,data=Offset},
+	NewState = State#modbus_state{tid=State#modbus_state.tid + 1},
+	{ok, Data} = send_and_receive(NewState,Request),
+
+	FinalData = bytes_to_bits(Data),
+
+	{reply, FinalData, NewState, 5000};
+
+
 handle_call({read_hreg_16, Start, Offset}, _From, State) ->
 	Request = #rtu_request{address=State#modbus_state.device_address,function_code=?FC_READ_HREGS,start=Start,data=Offset},
 	NewState = State#modbus_state{tid=State#modbus_state.tid + 1},
@@ -77,7 +122,7 @@ handle_call({write_hreg_16,Offset,OrigData}, _From, State) ->
 	{ok, [_Address,_FunctionCode|Data]} = send_and_receive(NewState, Request),
 
 	[FinalData] = bytes_to_words(Data),
-            
+
 	{reply, FinalData, NewState, 5000};
 
 handle_call(stop,_From,State) ->
@@ -109,15 +154,33 @@ send_and_receive(State,Request) ->
 	ok = modbus:get_response_header(State,TheRequest),
 	{ok, _Data} = modbus:get_response_data(State,TheRequest).
 
+
+% Take a list of modbus bytes, and convert it to a list of bits.
+bytes_to_bits(Bytes) when is_integer(Bytes) ->
+	Bits = erlang:integer_to_list(Bytes, 2),
+	List = lists:foldl( fun(Elem, Acc) ->
+						 Acc ++ [erlang:list_to_integer([Elem])]
+				 end, [], Bits),
+	List ++ lists:duplicate(8 - length(List), 0);
+
+bytes_to_bits(Bytes) ->
+	bytes_to_bits(Bytes, []).
+
+bytes_to_bits([], Acc) ->
+	Acc;
+bytes_to_bits([Byte | MoreBytes], Acc) ->
+	bytes_to_bits(MoreBytes, Acc ++ bytes_to_bits(Byte)).
+
+
 % Take a list of modbus bytes, and convert it to a list of words.
-bytes_to_words([],[Acc])->
-  Acc;  
-bytes_to_words([],Acc)->
-  Acc;  
-bytes_to_words(Bytes,Acc) ->
-  Tail = lists:nthtail(2,Bytes),
-  Value = lists:nth(1, Bytes) * 256 + lists:nth(2,Bytes),
-  bytes_to_words(Tail,Acc ++ [Value]).
 bytes_to_words(Bytes) ->
-  bytes_to_words(Bytes,[]).
+	bytes_to_words(Bytes,[]).
+
+bytes_to_words([],[Acc])->
+	Acc;  
+bytes_to_words([],Acc)->
+	Acc;  
+bytes_to_words([Byte1, Byte2 | Tail], Acc) ->
+	<<Value:16/integer>> = <<Byte1:8, Byte2:8>>,
+	bytes_to_words(Tail,Acc ++ [Value]).
 

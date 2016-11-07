@@ -9,77 +9,45 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--export([send_request_message/2,checksum/1,check_checksum/1,generate_request_message/1,get_response_header/2,get_response_data/2]).
+-export([send_request_message/1,generate_request_message/1,get_response_header/1,get_response_data/1]).
 
 -define(TIMEOUT, 3000).
 
-send_request_message(State,Request) ->
-	Message =  generate_request_message(Request),
-	gen_tcp:send(State#modbus_state.sock,Message).
+send_request_message(State) ->
+	Message =  generate_request_message(State),
+	gen_tcp:send(State#tcp_request.sock, Message).
 
-generate_request_message(Request) when is_record(Request, tcp_request) ->
-	RtuRequest = Request#tcp_request.rtu_request,
-	TID = Request#tcp_request.tid,
 
-	RtuRequestMessage = generate_request_message(RtuRequest),
+generate_request_message(#tcp_request{tid = Tid, address = Address, function = ?FC_WRITE_HREGS, start = Start, data = Data}) ->
+	Quantity = length(Data),
+	ValuesBin = list_word16_to_binary(Data),
+	ByteCount = length(binary_to_list(ValuesBin)),
+	Message = <<Address:8, ?FC_WRITE_HREGS:8, Start:16, Quantity:16, ByteCount:8, ValuesBin/binary>>,
 
-	case RtuRequestMessage of
-		function_not_implemented -> erlang:error(function_not_implemented);
-		_ ->
+	Size = size(Message),
+	<<Tid:16, 0, 0, Size:16, Message/binary>>;
 
-			RtuRequestMessageAsList = binary_to_list(RtuRequestMessage),
-			{RtuRequestMessageNoChecksum,_Checksum} = lists:split(length(RtuRequestMessageAsList)-2,RtuRequestMessageAsList),
+generate_request_message(#tcp_request{tid = Tid, address = Address, function = Code, start = Start, data = Offset}) ->
+	Message = <<Address:8, Code:8, Start:16, Offset:16>>,
+	Size = size(Message),
+	<<Tid:16, 0, 0, Size:16, Message/binary>>.
 
-			RtuReq = list_to_binary(RtuRequestMessageNoChecksum),
 
-			RtuRequestSize = size(RtuReq),
+get_response_header(State) ->
+	TID = State#tcp_request.tid,
+	{ok, [Tid1, Tid2, 0, 0, _, _TcpSize, Address, Code]} = gen_tcp:recv(State#tcp_request.sock, 8, ?TIMEOUT),
+	% validate the tid
+	<<TID:16/integer>> = <<Tid1, Tid2>>,
 
-			<<TID:16, 0,0, RtuRequestSize:16, RtuReq/binary>>
-	end;
-
-generate_request_message(Request) when is_record(Request, rtu_request) ->
-	Message = case Request#rtu_request.function_code of 
-		?FC_READ_COILS ->
-			<<(Request#rtu_request.address):8, (Request#rtu_request.function_code):8, (Request#rtu_request.start):16,(Request#rtu_request.data):16>>; 
-		?FC_READ_INPUTS ->
-			<<(Request#rtu_request.address):8, (Request#rtu_request.function_code):8, (Request#rtu_request.start):16,(Request#rtu_request.data):16>>; 
-		?FC_READ_HREGS ->
-			<<(Request#rtu_request.address):8, (Request#rtu_request.function_code):8, (Request#rtu_request.start):16,(Request#rtu_request.data):16>>; 
-		?FC_READ_IREGS ->
-			<<(Request#rtu_request.address):8, (Request#rtu_request.function_code):8, (Request#rtu_request.start):16,(Request#rtu_request.data):16>>;
-		?FC_WRITE_HREGS ->
-			Quantity = length(Request#rtu_request.data),
-			ValuesBin = list_word16_to_binary(Request#rtu_request.data),
-			ByteCount = length(binary_to_list(ValuesBin)),
-			<<(Request#rtu_request.address):8, (Request#rtu_request.function_code):8, (Request#rtu_request.start):16,Quantity:16,ByteCount:8,ValuesBin/binary>>;
-		_ ->
-			erlang:error(function_not_implemented)
-	end,
-
-	Checksum = checksum(Message),
-	<<Message/binary, Checksum/binary>>.
-
-get_response_header(State,OriginalRequest) when is_record(OriginalRequest, tcp_request) ->
-	TID = State#modbus_state.tid,
-	_DeviceAddress = State#modbus_state.device_address,
-	{ok, [0, TID, 0, 0, 0, _TcpSize]} = gen_tcp:recv(State#modbus_state.sock,6,?TIMEOUT),
-
-	get_response_header(State,OriginalRequest#tcp_request.rtu_request);
-
-get_response_header(State, OriginalRequest) when is_record(OriginalRequest, rtu_request) ->
-
-	% Get RTU header (also encapsulated within TCP)
-	{ok, [Address, Code]} = gen_tcp:recv(State#modbus_state.sock,2,?TIMEOUT),
-
-	% validate the RTU header->
-	OrigAddress = OriginalRequest#rtu_request.address,	
-	OrigCode = OriginalRequest#rtu_request.function_code,
+	% validate the header
+	OrigAddress = State#tcp_request.address,	
+	OrigCode = State#tcp_request.function,
 	BadCode = OrigCode + 128,
 
  	case {Address,Code} of
 		{OrigAddress,OrigCode} -> ok;
 		{OrigAddress,BadCode} -> 
-			{ok, [ErrorCode]} = gen_tcp:recv(State#modbus_state.sock,1,?TIMEOUT),
+			{ok, [ErrorCode]} = gen_tcp:recv(State#tcp_request.sock, 1, ?TIMEOUT),
 
 			case ErrorCode of
 				1 -> {error, illegal_function};
@@ -94,34 +62,16 @@ get_response_header(State, OriginalRequest) when is_record(OriginalRequest, rtu_
 		{_,_}=Junk -> io:format("Junk: ~w~n", [Junk]), {error,junkResponse}
   	end.
 
-get_response_data(State,OriginalRequest) when is_record(OriginalRequest, tcp_request) ->
-	get_response_data(State,OriginalRequest#tcp_request.rtu_request);
+get_response_data(State) ->
 
-get_response_data(State, OriginalRequest) when is_record(OriginalRequest, rtu_request) ->
-
-	case OriginalRequest#rtu_request.function_code of
+	case State#tcp_request.function of
 		?FC_WRITE_HREGS -> 
-			Size = 4,
-			ResponseChecksum = [OriginalRequest#rtu_request.address, OriginalRequest#rtu_request.function_code];
+			Size = 4;
 		_ ->
-			{ok, [Size]} = gen_tcp:recv(State#modbus_state.sock, 1, ?TIMEOUT),
-			ResponseChecksum = [OriginalRequest#rtu_request.address, OriginalRequest#rtu_request.function_code, Size]
+			{ok, [Size]} = gen_tcp:recv(State#tcp_request.sock, 1, ?TIMEOUT)
 	end,
 
-	{ok, Data} = gen_tcp:recv(State#modbus_state.sock, Size, ?TIMEOUT),
-
-	% Get and validate the rtu checksum
-	case State#modbus_state.type of
-		rtu ->
-			{ok, Checksum} = gen_tcp:recv(State#modbus_state.sock, 2, ?TIMEOUT),
-
-			{ok,_} = check_checksum(ResponseChecksum ++ Data ++ Checksum);
-		
-		_ -> true
-	end,
-
-	% Ok, return the data
-	{ ok, Data }.
+	gen_tcp:recv(State#tcp_request.sock, Size, ?TIMEOUT).
 
 
 list_word16_to_binary(Values) when is_list(Values) ->
@@ -138,45 +88,4 @@ concat_binary(List) ->
 			    true            -> A
 			end
 		end, <<>>, List).
-
-checksum(Data) when is_binary(Data)->
-	list_to_binary(checksum(binary_to_list(Data)));
-checksum(Data) when is_list(Data) ->
-	Value = crc16:calc(Data),
-	[Value rem 256, Value div 256].
-
-% Returns true if the last two elements of Data are the checksum
-check_checksum(Data) when is_binary(Data) ->
-	check_checksum( binary_to_list(Data) );
-check_checksum(Data) when is_list(Data) ->
-	{Head,Checksum} = lists:split(length(Data)-2,Data),
-	ChecksumOfHead = checksum(Head),
-
-	case Checksum of
-		ChecksumOfHead -> {ok, Head};
-		_ -> {error, checksum }
-	end.
-
-request_message_test() ->
-	% Modbus RTU tests
-	?assertEqual(<<1, 3, 0, 5, 0, 1, 148, 11>>, 
-		generate_request_message(#rtu_request{address=1,function_code=?FC_READ_HREGS,start=5,data=1})),
-
-	?assertEqual(<<1, 4, 0, 10, 0, 2, 81, 201>>,
-		generate_request_message(#rtu_request{address=1,function_code=?FC_READ_IREGS,start=10,data=2})),
-
-	?assertEqual(<<2, 16, 0, 10, 0, 3, 6, 0, 3, 0, 4, 0, 5, 6, 161>>,
-		generate_request_message(#rtu_request{address=2,function_code=?FC_WRITE_HREGS,start=10,data=[3,4,5]})),
-
-	?assertError(function_not_implemented, generate_request_message(#rtu_request{address=1,function_code=0})),
-
-
-	% Modbus TCP tests
-	?assertEqual(<<0, 1, 0, 0, 0, 6, 1, 3, 0, 5, 0, 1>>, 
-		generate_request_message(#tcp_request{tid=1, rtu_request=#rtu_request{address=1,function_code=?FC_READ_HREGS,start=5,data=1}})),
-
-	?assertEqual(<<0, 22, 0, 0, 0, 6, 100, 4, 0, 10, 0, 2>>, 
-		generate_request_message(#tcp_request{tid=22, rtu_request=#rtu_request{address=100,function_code=?FC_READ_IREGS,start=10,data=2}})),
-
-	?assertError(function_not_implemented, generate_request_message(#tcp_request{tid=22, rtu_request=#rtu_request{address=11,function_code=0}})). 
 

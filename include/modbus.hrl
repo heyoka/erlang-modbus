@@ -7,6 +7,4 @@
 -define(FC_WRITE_COILS,   16#0f).
 -define(FC_WRITE_HREGS,   16#10).
 
--record(rtu_request, { address, function_code, start, data }).
--record(tcp_request, { tid, rtu_request }).
--record(modbus_state, { type, sock, device_address, tid }).
+-record(tcp_request, {sock, tid = 1, address = 1, function, start, data }).

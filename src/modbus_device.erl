@@ -1,7 +1,7 @@
 %% @author Caleb Tennis <caleb.tennis@gmail.com>
 %% @copyright 2010 Data Cave, Inc.  www.thedatacave.com
 %% @version 0.9
-%% @doc A way to interact with modbus devices on an ethernet network
+%% @doc A way to interact with modbus-tcp devices on an ethernet network
 
 -module(modbus_device).
 -author('Caleb Tennis <caleb.tennis@gmail.com>').
@@ -25,32 +25,51 @@
 -include("modbus.hrl").
 -behavior(gen_server).
 
-%% @spec connect(Host:: string(), Port :: integer (), DeviceAddress :: integer () ) -> ok | pid()
-%% @doc Connect to the remote TCP device
+%% @doc Function to connect with the modbus device.
+%% @end
+-spec connect(Host::string(), Port::integer(), DeviceAddr::integer()) -> {ok, pid()} | {error, term()}.
 connect(Host, Port, DeviceAddr) ->
-	{ok, Pid} = gen_server:start_link(modbus_device, [Host, Port, DeviceAddr],[]),
-	Pid.
+	gen_server:start_link(modbus_device, [Host, Port, DeviceAddr],[]).
 
-disconnect(Pid) -> gen_server:call(Pid, stop).
+%% @doc Function to disconnect the modbus device.
+%% @end
+-spec disconnect(Pid::pid()) -> ok.
+disconnect(Pid) ->
+	gen_server:call(Pid, stop).
 
-%% @doc Read from a coil.
+%% @doc Function to request coils from the modbus device.
+%% @end
+-spec read_coils(Pid::pid(), Start::integer(), Offset::integer()) -> integer() | [integer()].
 read_coils(Pid, Start, Offset) ->
 	gen_server:call(Pid, {read_coils, Start, Offset}).
 
-%% @doc Read from a bit.
+%% @doc Function to request inputs from the modbus device.
+%% @end
+-spec read_inputs(Pid::pid(), Start::integer(), Offset::integer()) -> integer() | [integer()].
 read_inputs(Pid, Start, Offset) ->
 	gen_server:call(Pid, {read_inputs, Start, Offset}).
 
-%% @doc Read from a holding register.
+%% @doc Function to request holding registers from the modbus device.
+%% @end
+-spec read_hreg(Pid::pid(), Start::integer(), Offset::integer()) -> integer() | [integer()].
 read_hreg(Pid, Start, Offset) ->
 	gen_server:call(Pid, {read_hreg, Start, Offset}).
 
+%% @doc Function to request input registers from the modbus device.
+%% @end
+-spec read_ireg(Pid::pid(), Start::integer(), Offset::integer()) -> integer() | [integer()].
 read_ireg(Pid, Start, Offset) ->
 	gen_server:call(Pid, {read_ireg, Start, Offset}).
 
+%% @doc Function to write data on holding registers from the modbus device.
+%% @end
+-spec write_hreg(Pid::pid(), Start::integer(), Value::integer()) -> term().
 write_hreg(Pid, Start, Value) ->
 	gen_server:call(Pid, {write_hreg, Start, Value }).
 
+%% @doc Function to request a memory position from the modbus device.
+%% @end
+-spec read_memory(Pid::pid(), string(), Offset::integer()) -> number() | [number()].
 read_memory(Pid, "%MD" ++ PosNum, Offset) ->
 	[Line, Word] = string:tokens(PosNum, "."),
 	Reg = erlang:list_to_integer(Line) * 32768 + erlang:list_to_integer(Word) *2,
@@ -71,6 +90,9 @@ read_memory(Pid, "%MX0." ++ PosNum, Offset) ->
 	Reg = erlang:list_to_integer(Word) * 8 + erlang:list_to_integer(Bit),
 	gen_server:call(Pid, {read_coils, Reg, Offset}).
 
+%% @doc Function to request a list of memory positions from the modbus device.
+%% @end
+-spec read_memory(Pid::pid(), list()) -> [{string(), number()}].
 read_memory(Pid, "%M" ++ _ = MemPosition) ->
 	read_memory(Pid, MemPosition, 1);
 
@@ -113,8 +135,7 @@ read_memory(Pid, List) ->
 			{Reg, MemPosition} ->
 				[{Reg, 1, [MemPosition]}, {RegAcc, OffsetAcc, MemAcc} | Acc]
 		end
-	end, [{0, 0, []}], lists:sort(NewList)),
-	erlang:display(ReqList),
+	end, [{0, 0, []}], lists:usort(NewList)),
 
 	lists:foldl( fun(Elem, Acc) ->
 		case Elem of 
@@ -159,6 +180,8 @@ read_memory(Pid, List) ->
 
 
 %% Internal API (gen_server)
+%% ===== ===== ===== ===== ===== ===== ===== ===== =====
+
 init([Host, Port, DeviceAddr]) ->
 	Retval = gen_tcp:connect(Host, Port, [{active,false}, {packet, 0}]),
 
@@ -273,14 +296,21 @@ terminate(_Reason,State) ->
 
 code_change(_OldVsn, State, _Extra) -> { ok, State }.
 
+
+%%% %%% -------------------------------------------------------------------
+%% Util
+%%% %%% -------------------------------------------------------------------
+
 send_and_receive(State) ->
 
 	ok = modbus:send_request_message(State),
 	ok = modbus:get_response_header(State),
 	{ok, _Data} = modbus:get_response_data(State).
 
-
-% Take a list of modbus bytes, and convert it to a list of bits.
+%% @private
+%% @doc Function to convert bytes to bits.
+%% @end
+-spec bytes_to_bits(Bytes::list()) -> float().
 bytes_to_bits(Bytes) when is_integer(Bytes) ->
 	Bits = erlang:integer_to_list(Bytes, 2),
 	List = lists:foldl( fun(Elem, Acc) ->
@@ -291,16 +321,20 @@ bytes_to_bits(Bytes) when is_integer(Bytes) ->
 bytes_to_bits(Bytes) ->
 	bytes_to_bits(Bytes, []).
 
+%% @hidden
 bytes_to_bits([], Acc) ->
 	Acc;
 bytes_to_bits([Byte | MoreBytes], Acc) ->
 	bytes_to_bits(MoreBytes, Acc ++ bytes_to_bits(Byte)).
 
-
-% Take a list of modbus bytes, and convert it to a list of words.
+%% @private
+%% @doc Function to convert bytes to words.
+%% @end
+-spec bytes_to_words(Bytes::list()) -> float().
 bytes_to_words(Bytes) ->
 	bytes_to_words(Bytes,[]).
 
+%% @hidden
 bytes_to_words([],[Acc])->
 	Acc;  
 bytes_to_words([],Acc)->
@@ -309,6 +343,7 @@ bytes_to_words([Byte1, Byte2 | Tail], Acc) ->
 	<<Value:16/integer>> = <<Byte1:8, Byte2:8>>,
 	bytes_to_words(Tail,Acc ++ [Value]).
 
+%% @private
 %% @doc Function to convert words to a float number.
 %% @end
 -spec words_to_float(List::list()) -> float().

@@ -25,11 +25,13 @@
 -include("modbus.hrl").
 -behavior(gen_server).
 
+-define(TIMEOUT, 3000).
+
 %% @doc Function to connect with the modbus device.
 %% @end
 -spec connect(Host::string(), Port::integer(), DeviceAddr::integer()) -> {ok, pid()} | {error, term()}.
 connect(Host, Port, DeviceAddr) ->
-	gen_server:start_link(modbus_device, [Host, Port, DeviceAddr],[]).
+	gen_server:start_link(modbus_device, [Host, Port, DeviceAddr],[{timeout, ?TIMEOUT}]).
 
 %% @doc Function to disconnect the modbus device.
 %% @end
@@ -188,9 +190,9 @@ init([Host, Port, DeviceAddr]) ->
 	case Retval of
 		{ok, Sock} ->
 			State = #tcp_request{sock = Sock, address = DeviceAddr},
-			{ok, State, 5000};
+			{ok, State};
 		{error,ErrorType} ->
-			{stop,{error,ErrorType}}
+			{stop, {error, ErrorType}}
 	end.
 
 handle_call({read_coils, Start, Offset}, _From, State) ->
@@ -207,7 +209,7 @@ handle_call({read_coils, Start, Offset}, _From, State) ->
 		{Result, _} -> Result
 	end,
 
-	{reply, FinalData, NewState, 5000};
+	{reply, FinalData, NewState};
 
 handle_call({read_inputs, Start, Offset}, _From, State) ->
 	NewState = State#tcp_request{
@@ -223,7 +225,7 @@ handle_call({read_inputs, Start, Offset}, _From, State) ->
 		{Result, _} -> Result
 	end,
 
-	{reply, FinalData, NewState, 5000};
+	{reply, FinalData, NewState};
 
 
 handle_call({read_hreg, Start, Offset}, _From, State) ->
@@ -237,7 +239,7 @@ handle_call({read_hreg, Start, Offset}, _From, State) ->
 
 	FinalData = bytes_to_words(Data),
 
-	{reply, FinalData, NewState, 5000};
+	{reply, FinalData, NewState};
 
 handle_call({read_ireg,Start, Offset}, _From, State) ->
 	NewState = State#tcp_request{
@@ -250,7 +252,7 @@ handle_call({read_ireg,Start, Offset}, _From, State) ->
 
 	FinalData = bytes_to_words(Data),
 
-	{reply, FinalData, NewState, 5000};
+	{reply, FinalData, NewState};
 
 handle_call({read_raw, Start, Offset}, _From, State) ->
 	NewState = State#tcp_request{
@@ -261,7 +263,7 @@ handle_call({read_raw, Start, Offset}, _From, State) ->
 	},
 	{ok, Data} = send_and_receive(NewState),
 
-	{reply, Data, NewState, 5000};
+	{reply, Data, NewState};
 
 handle_call({write_hreg, Start, OrigData}, From, State) when is_integer(OrigData) ->
 	handle_call({write_hreg, Start, [OrigData]}, From, State);
@@ -278,23 +280,20 @@ handle_call({write_hreg, Start, OrigData}, _From, State) ->
 
 	[FinalData] = bytes_to_words(Data),
 
-	{reply, FinalData, NewState, 5000};
+	{reply, FinalData, NewState}.
 
-handle_call(stop,_From,State) ->
+handle_cast(_From, State) ->
+	{noreply, State}.
+
+handle_info(_Info, State) ->
+	{noreply, State}.
+
+terminate(_, State) ->
 	gen_tcp:close(State#tcp_request.sock),
-	{stop, normal, stopped, State}.
+	ok.
 
-handle_cast(_From,State) -> {noreply, State}.
-
-% If we timeout, do a stop
-handle_info(timeout,State) ->
-	handle_call(stop,whocares,State),
-	{stop, normal, State}.
-
-terminate(_Reason,State) -> 
-	handle_call(stop,whocares,State).
-
-code_change(_OldVsn, State, _Extra) -> { ok, State }.
+code_change(_OldVsn, State, _Extra) -> 
+	 {ok, State}.
 
 
 %%% %%% -------------------------------------------------------------------

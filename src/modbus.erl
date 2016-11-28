@@ -11,8 +11,6 @@
 
 -export([send_request_message/1,generate_request_message/1,get_response_header/1,get_response_data/1]).
 
--define(TIMEOUT, 3000).
-
 %% @doc Function to generate and send the request message throw the tcp socket.
 %% @end
 -spec send_request_message(State::#tcp_request{}) -> term().
@@ -44,7 +42,7 @@ generate_request_message(#tcp_request{tid = Tid, address = Address, function = C
 -spec get_response_header(State::#tcp_request{}) -> ok | {error, term()}.
 get_response_header(State) ->
 	TID = State#tcp_request.tid,
-	{ok, [Tid1, Tid2, 0, 0, _, _TcpSize, Address, Code]} = gen_tcp:recv(State#tcp_request.sock, 8, ?TIMEOUT),
+	{ok, [Tid1, Tid2, 0, 0, _, _TcpSize, Address, Code]} = gen_tcp:recv(State#tcp_request.sock, 8),
 	% validate the tid
 	<<TID:16/integer>> = <<Tid1, Tid2>>,
 
@@ -56,7 +54,7 @@ get_response_header(State) ->
  	case {Address,Code} of
 		{OrigAddress,OrigCode} -> ok;
 		{OrigAddress,BadCode} -> 
-			{ok, [ErrorCode]} = gen_tcp:recv(State#tcp_request.sock, 1, ?TIMEOUT),
+			{ok, [ErrorCode]} = gen_tcp:recv(State#tcp_request.sock, 1),
 
 			case ErrorCode of
 				1 -> {error, illegal_function};
@@ -80,10 +78,10 @@ get_response_data(State) ->
 		?FC_WRITE_HREGS -> 
 			Size = 4;
 		_ ->
-			{ok, [Size]} = gen_tcp:recv(State#tcp_request.sock, 1, ?TIMEOUT)
+			{ok, [Size]} = gen_tcp:recv(State#tcp_request.sock, 1)
 	end,
 
-	gen_tcp:recv(State#tcp_request.sock, Size, ?TIMEOUT).
+	gen_tcp:recv(State#tcp_request.sock, Size).
 
 
 %%% %%% -------------------------------------------------------------------

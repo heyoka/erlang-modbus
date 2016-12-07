@@ -31,13 +31,13 @@
 %% @end
 -spec connect(Host::string(), Port::integer(), DeviceAddr::integer()) -> {ok, pid()} | {error, term()}.
 connect(Host, Port, DeviceAddr) ->
-	gen_server:start_link(modbus_device, [Host, Port, DeviceAddr],[{timeout, ?TIMEOUT}]).
+	gen_server:start(modbus_device, [Host, Port, DeviceAddr],[{timeout, ?TIMEOUT}]).
 
 %% @doc Function to disconnect the modbus device.
 %% @end
 -spec disconnect(Pid::pid()) -> ok.
 disconnect(Pid) ->
-	gen_server:call(Pid, stop).
+	gen_server:cast(Pid, stop).
 
 %% @doc Function to request coils from the modbus device.
 %% @end
@@ -281,6 +281,10 @@ handle_call({write_hreg, Start, OrigData}, _From, State) ->
 	[FinalData] = bytes_to_words(Data),
 
 	{reply, FinalData, NewState}.
+
+
+handle_cast(stop, State) ->
+	{stop, normal, State};
 
 handle_cast(_From, State) ->
 	{noreply, State}.

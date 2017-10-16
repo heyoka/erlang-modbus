@@ -1,5 +1,5 @@
 {application, modbus,
- [{description, "A modbus RTU and TCP driver for Erlang"},
+ [{description, "A ModbusTCP driver for Erlang"},
   {vsn, "0.1.0"},
   {registered, []},
   {applications,

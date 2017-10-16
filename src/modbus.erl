@@ -4,107 +4,206 @@
 %% @doc A way to interact with modbus-tcp devices on an ethernet network
 
 -module(modbus).
+-export([
+	connect/3,
+	disconnect/1,
+	read_coils/3,
+	read_inputs/3,
+	read_ireg/3,
+	read_hreg/3,
+	read_coils/4,
+	read_inputs/4,
+	read_ireg/4,
+	read_hreg/4,
+	read_memory/2,
+	read_memory/3,
+	write_hreg/3
+]).
 
--include("modbus.hrl").
-
--include_lib("eunit/include/eunit.hrl").
-
--export([send_request_message/1,generate_request_message/1,get_response_header/1,get_response_data/1]).
-
-%% @doc Function to generate and send the request message throw the tcp socket.
-%% @end
--spec send_request_message(State::#tcp_request{}) -> term().
-send_request_message(State) ->
-	Message =  generate_request_message(State),
-	gen_tcp:send(State#tcp_request.sock, Message).
-
-
-%% @doc Function to generate  the request message from State.
-%% @end
--spec generate_request_message(State::#tcp_request{}) -> binary().
-generate_request_message(#tcp_request{tid = Tid, address = Address, function = ?FC_WRITE_HREGS, start = Start, data = Data}) ->
-	Quantity = length(Data),
-	ValuesBin = list_word16_to_binary(Data),
-	ByteCount = length(binary_to_list(ValuesBin)),
-	Message = <<Address:8, ?FC_WRITE_HREGS:8, Start:16, Quantity:16, ByteCount:8, ValuesBin/binary>>,
-
-	Size = size(Message),
-	<<Tid:16, 0, 0, Size:16, Message/binary>>;
-
-generate_request_message(#tcp_request{tid = Tid, address = Address, function = Code, start = Start, data = Offset}) ->
-	Message = <<Address:8, Code:8, Start:16, Offset:16>>,
-	Size = size(Message),
-	<<Tid:16, 0, 0, Size:16, Message/binary>>.
-
-
-%% @doc Function to get and validate the response header from the tcp socket.
-%% @end
--spec get_response_header(State::#tcp_request{}) -> ok | {error, term()}.
-get_response_header(State) ->
-	TID = State#tcp_request.tid,
-	{ok, [Tid1, Tid2, 0, 0, _, _TcpSize, Address, Code]} = gen_tcp:recv(State#tcp_request.sock, 8),
-	% validate the tid
-	<<TID:16/integer>> = <<Tid1, Tid2>>,
-
-	% validate the header
-	OrigAddress = State#tcp_request.address,	
-	OrigCode = State#tcp_request.function,
-	BadCode = OrigCode + 128,
-
- 	case {Address,Code} of
-		{OrigAddress,OrigCode} -> ok;
-		{OrigAddress,BadCode} -> 
-			{ok, [ErrorCode]} = gen_tcp:recv(State#tcp_request.sock, 1),
-
-			case ErrorCode of
-				1 -> {error, illegal_function};
-				2 -> {error, illegal_data_address};
-				3 -> {error, illegal_data_value};
-				4 -> {error, slave_device_failure};
-				5 -> {error, acknowledge};
-				6 -> {error, slave_device_busy};
-				_ -> {error, unknown_response_code}
-			end;
-			
-		{_,_}=Junk -> io:format("Junk: ~w~n", [Junk]), {error,junkResponse}
-  	end.
-
-%% @doc Function to get the response data from the tcp socket.
-%% @end
--spec get_response_data(State::#tcp_request{}) -> {ok, term()}.
-get_response_data(State) ->
-
-	case State#tcp_request.function of
-		?FC_WRITE_HREGS -> 
-			Size = 4;
-		_ ->
-			{ok, [Size]} = gen_tcp:recv(State#tcp_request.sock, 1)
-	end,
-
-	gen_tcp:recv(State#tcp_request.sock, Size).
+-define(TIMEOUT, 3000).
 
 
 %%% %%% -------------------------------------------------------------------
-%% Util
+%% Basic Modbus functions
 %%% %%% -------------------------------------------------------------------
 
-%% @private
-%% @doc Function to convert a list of words to binary.
+%% @doc Function to connect with the modbus device.
 %% @end
--spec list_word16_to_binary(Values::list()) -> binary().
-list_word16_to_binary(Values) when is_list(Values) ->
-	concat_binary([<<X:16>> || X <- Values]).
+-spec connect(Host::string(), Port::integer(), DeviceAddr::integer()) -> {ok, pid()} | {error, term()}.
+connect(Host, Port, DeviceAddr) ->
+	gen_server:start(modbus_device, [Host, Port, DeviceAddr],[{timeout, ?TIMEOUT}]).
 
-%% @hidden
-concat_binary([]) ->
-    <<>>;
-concat_binary([Part]) ->
-    Part;
-concat_binary(List) ->
-    lists:foldr(fun (A, B) ->
-			if
-			    bit_size(B) > 0 -> <<A/binary, B/binary>>;
-			    true            -> A
-			end
-		end, <<>>, List).
+%% @doc Function to disconnect the modbus device.
+%% @end
+-spec disconnect(Pid::pid()) -> ok.
+disconnect(Pid) ->
+	gen_server:cast(Pid, stop).
+
+%% @doc Function to request coils from the modbus device.
+%% @end
+-spec read_coils(Pid::pid(), Start::integer(), Offset::integer()) -> [0|1].
+read_coils(Pid, Start, Offset) ->
+	read_coils(Pid, Start, Offset, []).
+
+%% @doc Function to request coils from the modbus device.
+%% @end
+-spec read_coils(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) -> [0|1].
+read_coils(Pid, Start, Offset, Opts) ->
+	gen_server:call(Pid, {read_coils, Start, Offset, Opts}).
+
+%% @doc Function to request inputs from the modbus device.
+%% @end
+-spec read_inputs(Pid::pid(), Start::integer(), Offset::integer()) -> [0|1].
+read_inputs(Pid, Start, Offset) ->
+	read_inputs(Pid, Start, Offset, []).
+
+%% @doc Function to request inputs from the modbus device.
+%% @end
+-spec read_inputs(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) -> [0|1].
+read_inputs(Pid, Start, Offset, Opts) ->
+	gen_server:call(Pid, {read_inputs, Start, Offset, Opts}).
+
+%% @doc Function to request holding registers from the modbus device.
+%% @end
+-spec read_hreg(Pid::pid(), Start::integer(), Offset::integer()) -> [integer()].
+read_hreg(Pid, Start, Offset) ->
+	read_hreg(Pid, Start, Offset, []).
+
+%% @doc Function to request holding registers from the modbus device.
+%% @end
+-spec read_hreg(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) ->[integer()].
+read_hreg(Pid, Start, Offset, Opts) ->
+	gen_server:call(Pid, {read_hreg, Start, Offset, Opts}).
+
+%% @doc Function to request input registers from the modbus device.
+%% @end
+-spec read_ireg(Pid::pid(), Start::integer(), Offset::integer()) ->[integer()].
+read_ireg(Pid, Start, Offset) ->
+	read_ireg(Pid, Start, Offset, []).
+
+%% @doc Function to request input registers from the modbus device.
+%% @end
+-spec read_ireg(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) ->[integer()].
+read_ireg(Pid, Start, Offset, Opts) ->
+	gen_server:call(Pid, {read_ireg, Start, Offset, Opts}).
+
+%% @doc Function to write data on holding registers from the modbus device.
+%% @end
+-spec write_hreg(Pid::pid(), Start::integer(), Value::integer()) -> term().
+write_hreg(Pid, Start, Value) ->
+	gen_server:call(Pid, {write_hreg, Start, Value }).
+
+
+%%% %%% -------------------------------------------------------------------
+%% Extended functions
+%%% %%% -------------------------------------------------------------------
+
+%% @doc Function to request a memory position from the modbus device.
+%% @end
+-spec read_memory(Pid::pid(), string(), Offset::integer()) -> number() | [number()].
+read_memory(Pid, "%MD0." ++ PosNum, Offset) ->
+	Reg = erlang:list_to_integer(PosNum) *32,
+	gen_server:call(Pid, {read_coils, Reg, Offset*32, [{output, float32}]});
+
+read_memory(Pid, "%MW0." ++ PosNum, Offset) ->
+	Reg = erlang:list_to_integer(PosNum) *16,
+	gen_server:call(Pid, {read_coils, Reg, Offset*16, [{output, int16}]});
+
+read_memory(Pid, "%MB0." ++ PosNum, Offset) ->
+	Reg = erlang:list_to_integer(PosNum) *8,
+	gen_server:call(Pid, {read_coils, Reg, Offset*8, [{output, ascii}]});
+
+read_memory(Pid, "%MX0." ++ PosNum, Offset) ->
+	[Word, Bit] = string:tokens(PosNum, "."),
+	Reg = erlang:list_to_integer(Word) * 8 + erlang:list_to_integer(Bit),
+	gen_server:call(Pid, {read_coils, Reg, Offset, [{output, coils}]}).
+
+
+%% @doc Function to request a list of memory positions from the modbus device.
+%% @end
+-spec read_memory(Pid::pid(), list()) -> [{string(), number()}].
+read_memory(Pid, "%M" ++ _ = MemPosition) ->
+	read_memory(Pid, MemPosition, 1);
+
+read_memory(Pid, List) ->
+	NewList  = lists:foldl( fun(Elem, Acc) ->
+		case Elem of
+			"%MD0." ++ PosNum ->
+				Reg = erlang:list_to_integer(PosNum) *32,
+				[{Reg, Elem} | Acc];
+			"%MW0." ++ PosNum ->
+				Reg = erlang:list_to_integer(PosNum) *16,
+				[{Reg, Elem} | Acc];
+			"%MB0." ++ PosNum ->
+				Reg = erlang:list_to_integer(PosNum) *8,
+				[{Reg, Elem} | Acc];
+			"%MX0." ++ PosNum ->
+				[Word, Bit] = string:tokens(PosNum, "."),
+				Reg = erlang:list_to_integer(Word) * 8 + erlang:list_to_integer(Bit),
+				[{Reg, Elem} | Acc]
+		end
+	end, [], List),
+
+	ReqList = lists:foldl( fun(Elem, [{RegAcc, OffsetAcc, MemAcc} |Acc]) ->
+		NewRegAcc = RegAcc + OffsetAcc,
+		case Elem of
+			{NewRegAcc, "%MD0." ++ _ = MemPosition} ->
+				[{RegAcc, OffsetAcc +32, [MemPosition |MemAcc]} | Acc];
+			{NewRegAcc, "%MW0." ++ _ = MemPosition} ->
+				[{RegAcc, OffsetAcc +16, [MemPosition |MemAcc]} | Acc];
+			{NewRegAcc, "%MB0." ++ _ = MemPosition} ->
+				[{RegAcc, OffsetAcc +8, [MemPosition |MemAcc]} | Acc];
+			{NewRegAcc, "%MX0." ++ _ = MemPosition} ->
+				case MemAcc of
+					[["%MX0." ++_ | _] = MxAcc |MemAccTail] when length(MxAcc) < 8 ->
+						[{RegAcc, OffsetAcc +1, [[MemPosition |MxAcc] |MemAccTail]} | Acc];
+					_ ->
+						[{RegAcc, OffsetAcc +1, [[MemPosition] |MemAcc]} | Acc]
+				end;
+			{Reg, "%MD0." ++ _ = MemPosition} ->
+				[{Reg, 32, [MemPosition]}, {RegAcc, OffsetAcc, MemAcc} | Acc];
+			{Reg, "%MW0." ++ _ = MemPosition} ->
+				[{Reg, 16, [MemPosition]}, {RegAcc, OffsetAcc, MemAcc} | Acc];
+			{Reg, "%MB0." ++ _ = MemPosition} ->
+				[{Reg, 8, [MemPosition]}, {RegAcc, OffsetAcc, MemAcc} | Acc];
+			{Reg, "%MX0." ++ _ = MemPosition} ->
+				[{Reg, 1, [[MemPosition]]}, {RegAcc, OffsetAcc, MemAcc} | Acc]
+		end
+	end, [{0, 0, []}], lists:usort(NewList)),
+
+	lists:foldl( fun(Elem, Acc) ->
+		case Elem of 
+			{0, 0, []} ->
+				Acc;
+			{Reg, Offset, MemList} ->
+				Data = gen_server:call(Pid, {read_coils, Reg, Offset, [{output, binary}]}),
+				BinaryData = erlang:list_to_binary(Data),
+				{ResultList, _} = lists:foldl( fun(Mem, {MemAcc, DataAcc}) ->
+					case Mem of
+						"%MD0." ++ _ ->
+							<<Result:32/float, DataTail/binary>> = DataAcc,
+							{[{Mem, Result} |MemAcc], DataTail};
+						"%MW0." ++ _ ->
+							<<Result:16/integer, DataTail/binary>> = DataAcc,
+							{[{Mem, Result} |MemAcc], DataTail};
+						"%MB0." ++ _ ->
+							<<Result:8/integer, DataTail/binary>> = DataAcc,
+							{[{Mem, Result} |MemAcc], DataTail};
+						["%MX0." ++ _ |_] = MxList ->
+							<<Result:8/integer, DataTail/binary>> = DataAcc,
+							MxResultList = lists:reverse(erlang:integer_to_list(Result, 2)),
+							{FinalMxList, _} = lists:foldl( fun(MxElem, {MxAcc, MxResultAcc}) ->
+								case MxResultAcc of
+									[MxH | MxT] ->
+										{[{MxElem, erlang:list_to_integer([MxH])} |MxAcc], MxT};
+									[] ->
+										{[{MxElem, 0} |MxAcc], []}
+								end
+							end, {[], MxResultList}, lists:reverse(MxList)),
+							{MemAcc ++ FinalMxList, DataTail}
+					end
+				end, {Acc, BinaryData}, lists:reverse(MemList)),
+				ResultList
+		end
+	end, [], ReqList).
 

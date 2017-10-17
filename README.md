@@ -37,13 +37,29 @@ To connect to the modbus-tcp device use modbus:connect/3. Specifying the host, p
 {ok, Pid} = modbus:connect("127.0.0.1", 502, 1).
 ```
  
-### Reading registers ###
+### Reading ###
 
-To read a register you just need to create a connection and specify the number of the starting register and the number of registers you want to read.
+To read you just need to create a connection and specify the number of the starting register and the number of registers you want to read.
 
 ```
 {ok, Pid} = modbus:connect("127.0.0.1", 502, 1).
-Result = modbus:read_hreg(Pid, 1, 1).
+[0,1,1,0] = modbus:read_coils(Pid, 1, 4).
+[1,1,1,0,1,0,0,0] = modbus:read_inputs(Pid, 8, 8).
+[1793] = modbus:read_hregs(Pid, 128, 1).
+[302, 79] = modbus:read_iregs(Pid, 38, 2).
+ok = modbus:disconnect(Pid).
+```
+
+### Writing ###
+
+To write you just need to create a connection and specify the number of the starting register and the value or a list of values you want to write.
+
+```
+{ok, Pid} = modbus:connect("127.0.0.1", 502, 1).
+ok = modbus:write_coil(Pid, 1, 1).
+ok = modbus:write_coils(Pid, 8, [1,0,1,1,0,0,1,0,1]).
+ok = modbus:write_hreg(Pid, 128, 1932).
+ok = modbus:write_hregs(Pid, 38, [12,32,46,2345,234,2]).
 ok = modbus:disconnect(Pid).
 ```
 
@@ -65,7 +81,7 @@ You can specify the datatype of the output in the options. The valid options are
 Example:
 ```
 {ok, Pid} = modbus:connect("127.0.0.1", 502, 1).
-Result = modbus:read_ireg(Pid, 1, 2, [{output, int32}, {signed, true}]).
+[-365189] = modbus:read_ireg(Pid, 1, 2, [{output, int32}, {signed, true}]).
 ok = modbus:disconnect(Pid).
 ```
 
@@ -86,11 +102,3 @@ Otherwise you can specify a list of  memory positions you want to read. This wil
 Result = modbus:read_memory(Pid, ["%MD0.6", "%MW0.4", "%MX0.0.0", "%MW0.1"]).
 ok = modbus:disconnect(Pid).
 ```
-
-TODO
-------------
-
-Write coil
-Write register
-Write coils
-Write registers

@@ -9,15 +9,18 @@
 	disconnect/1,
 	read_coils/3,
 	read_inputs/3,
-	read_ireg/3,
-	read_hreg/3,
+	read_iregs/3,
+	read_hregs/3,
 	read_coils/4,
 	read_inputs/4,
-	read_ireg/4,
-	read_hreg/4,
+	read_iregs/4,
+	read_hregs/4,
 	read_memory/2,
 	read_memory/3,
-	write_hreg/3
+	write_coil/3,
+	write_coils/3,
+	write_hreg/3,
+	write_hregs/3
 ]).
 
 -define(TIMEOUT, 3000).
@@ -65,33 +68,51 @@ read_inputs(Pid, Start, Offset, Opts) ->
 
 %% @doc Function to request holding registers from the modbus device.
 %% @end
--spec read_hreg(Pid::pid(), Start::integer(), Offset::integer()) -> [integer()].
-read_hreg(Pid, Start, Offset) ->
-	read_hreg(Pid, Start, Offset, []).
+-spec read_hregs(Pid::pid(), Start::integer(), Offset::integer()) -> [integer()].
+read_hregs(Pid, Start, Offset) ->
+	read_hregs(Pid, Start, Offset, []).
 
 %% @doc Function to request holding registers from the modbus device.
 %% @end
--spec read_hreg(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) ->[integer()].
-read_hreg(Pid, Start, Offset, Opts) ->
-	gen_server:call(Pid, {read_hreg, Start, Offset, Opts}).
+-spec read_hregs(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) ->[integer()].
+read_hregs(Pid, Start, Offset, Opts) ->
+	gen_server:call(Pid, {read_hregs, Start, Offset, Opts}).
 
 %% @doc Function to request input registers from the modbus device.
 %% @end
--spec read_ireg(Pid::pid(), Start::integer(), Offset::integer()) ->[integer()].
-read_ireg(Pid, Start, Offset) ->
-	read_ireg(Pid, Start, Offset, []).
+-spec read_iregs(Pid::pid(), Start::integer(), Offset::integer()) ->[integer()].
+read_iregs(Pid, Start, Offset) ->
+	read_iregs(Pid, Start, Offset, []).
 
 %% @doc Function to request input registers from the modbus device.
 %% @end
--spec read_ireg(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) ->[integer()].
-read_ireg(Pid, Start, Offset, Opts) ->
-	gen_server:call(Pid, {read_ireg, Start, Offset, Opts}).
+-spec read_iregs(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) ->[integer()].
+read_iregs(Pid, Start, Offset, Opts) ->
+	gen_server:call(Pid, {read_iregs, Start, Offset, Opts}).
 
-%% @doc Function to write data on holding registers from the modbus device.
+%% @doc Function to write data on a single coil from the modbus device.
+%% @end
+-spec write_coil(Pid::pid(), Start::integer(), Value::integer()) -> term().
+write_coil(Pid, Start, Value) ->
+	gen_server:call(Pid, {write_coil, Start, Value}).
+
+%% @doc Function to write data on multiple coils from the modbus device.
+%% @end
+-spec write_coils(Pid::pid(), Start::integer(), Value::integer()) -> term().
+write_coils(Pid, Start, Value) ->
+	gen_server:call(Pid, {write_coils, Start, Value}).
+
+%% @doc Function to write data on a single register from the modbus device.
 %% @end
 -spec write_hreg(Pid::pid(), Start::integer(), Value::integer()) -> term().
 write_hreg(Pid, Start, Value) ->
-	gen_server:call(Pid, {write_hreg, Start, Value }).
+	gen_server:call(Pid, {write_hreg, Start, Value}).
+
+%% @doc Function to write data on multiple registers from the modbus device.
+%% @end
+-spec write_hregs(Pid::pid(), Start::integer(), Value::integer()) -> term().
+write_hregs(Pid, Start, Value) ->
+	gen_server:call(Pid, {write_hregs, Start, Value}).
 
 
 %%% %%% -------------------------------------------------------------------

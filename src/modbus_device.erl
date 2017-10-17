@@ -60,7 +60,7 @@ handle_call({read_inputs, Start, Offset, Opts}, _From, State) ->
 	{reply, FinalData, NewState};
 
 
-handle_call({read_hreg, Start, Offset, Opts}, _From, State) ->
+handle_call({read_hregs, Start, Offset, Opts}, _From, State) ->
 	NewState = State#tcp_request{
 		tid = State#tcp_request.tid +1,
 		function = ?FC_READ_HREGS,
@@ -72,7 +72,7 @@ handle_call({read_hreg, Start, Offset, Opts}, _From, State) ->
 	FinalData = output(Data, Opts, int16),
 	{reply, FinalData, NewState};
 
-handle_call({read_ireg,Start, Offset, Opts}, _From, State) ->
+handle_call({read_iregs,Start, Offset, Opts}, _From, State) ->
 	NewState = State#tcp_request{
 		tid = State#tcp_request.tid +1,
 		function = ?FC_READ_IREGS,
@@ -84,22 +84,56 @@ handle_call({read_ireg,Start, Offset, Opts}, _From, State) ->
 	FinalData = output(Data, Opts, int16),
 	{reply, FinalData, NewState};
 
-handle_call({write_hreg, Start, OrigData}, From, State) when is_integer(OrigData) ->
-	handle_call({write_hreg, Start, [OrigData]}, From, State);
+handle_call({write_coil, Start, Data}, _From, State) ->
+	<<NewData:16>> = case Data of
+		0 -> <<16#0000:16>>;
+		1 -> <<16#ff00:16>>
+	end,
 
-handle_call({write_hreg, Start, OrigData}, _From, State) ->
+	NewState = State#tcp_request{
+		tid = State#tcp_request.tid +1,
+		function = ?FC_WRITE_COIL,
+		start = Start,
+		data = NewData
+	},
+
+	{ok, _Data} = send_and_receive(NewState),
+	{reply, ok, NewState};
+
+handle_call({write_coils, Start, Data}, _From, State) ->
+	NewState = State#tcp_request{
+		tid = State#tcp_request.tid +1,
+		function = ?FC_WRITE_COILS,
+		start = Start,
+		data = Data
+	},
+
+	Length = length(Data),
+	{ok, Length} = send_and_receive(NewState),
+	{reply, ok, NewState};
+
+handle_call({write_hreg, Start, Data}, _From, State) ->
+	NewState = State#tcp_request{
+		tid = State#tcp_request.tid +1,
+		function = ?FC_WRITE_HREG,
+		start = Start,
+		data = Data
+	},
+
+	{ok, _Data} = send_and_receive(NewState),
+	{reply, ok, NewState};
+
+handle_call({write_hregs, Start, Data}, _From, State) ->
 	NewState = State#tcp_request{
 		tid = State#tcp_request.tid +1,
 		function = ?FC_WRITE_HREGS,
 		start = Start,
-		data = OrigData
+		data = Data
 	},
 
-	{ok, [_Address,_FunctionCode|Data]} = send_and_receive(NewState),
-
-	[FinalData] = modbus_util:binary_to_int16(Data),
-
-	{reply, FinalData, NewState}.
+	Length = length(Data),
+	{ok, Length} = send_and_receive(NewState),
+	{reply, ok, NewState}.
 
 
 handle_cast(stop, State) ->
@@ -134,17 +168,26 @@ send_and_receive(State) ->
 %% @doc Function to generate  the request message from State.
 %% @end
 -spec generate_request(State::#tcp_request{}) -> binary().
+generate_request(#tcp_request{tid = Tid, address = Address, function = ?FC_WRITE_COILS, start = Start, data = Data}) ->
+	Length = length(Data),
+	NewData = modbus_util:coils_to_binary(Data),
+	ByteSize = byte_size(NewData),
+	Message = <<Address:8, ?FC_WRITE_COILS:8, Start:16, Length:16, ByteSize:8, NewData/binary>>,
+
+	Size = byte_size(Message),
+	<<Tid:16, 0:16, Size:16, Message/binary>>;
+
 generate_request(#tcp_request{tid = Tid, address = Address, function = ?FC_WRITE_HREGS, start = Start, data = Data}) ->
-	Quantity = length(Data),
-	ValuesBin = modbus_util:int16_to_binary(Data),
-	ByteCount = length(binary_to_list(ValuesBin)),
-	Message = <<Address:8, ?FC_WRITE_HREGS:8, Start:16, Quantity:16, ByteCount:8, ValuesBin/binary>>,
+	Length = length(Data),
+	NewData = modbus_util:int16_to_binary(Data),
+	ByteSize = byte_size(NewData),
+	Message = <<Address:8, ?FC_WRITE_HREGS:8, Start:16, Length:16, ByteSize:8, NewData/binary>>,
 
 	Size = size(Message),
 	<<Tid:16, 0:16, Size:16, Message/binary>>;
 
-generate_request(#tcp_request{tid = Tid, address = Address, function = Code, start = Start, data = Offset}) ->
-	Message = <<Address:8, Code:8, Start:16, Offset:16>>,
+generate_request(#tcp_request{tid = Tid, address = Address, function = Code, start = Start, data = Data}) ->
+	Message = <<Address:8, Code:8, Start:16, Data:16>>,
 	Size = size(Message),
 	<<Tid:16, 0:16, Size:16, Message/binary>>.
 
@@ -152,13 +195,11 @@ generate_request(#tcp_request{tid = Tid, address = Address, function = Code, sta
 %% @doc Function to validate the response header and get the data from the tcp socket.
 %% @end
 -spec get_response(State::#tcp_request{}) -> ok | {error, term()}.
-get_response(State) ->
-	Tid = State#tcp_request.tid,
-	Address = State#tcp_request.address,	
-	Code = State#tcp_request.function,
+get_response(#tcp_request{sock = Socket, tid = Tid, address = Address, function = Code,
+			start = Start, data = OrigData}) ->
 	BadCode = Code + 128,
 
-	case gen_tcp:recv(State#tcp_request.sock, 0) of
+	case gen_tcp:recv(Socket, 0) of
 		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, BadCode, ErrorCode>>} ->
 			case ErrorCode of
 				1  -> {error, illegal_function};
@@ -173,6 +214,10 @@ get_response(State) ->
 				11 -> {error, failed_to_response};
 				_  -> {error, unknown_response_code}
 			end;
+		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Start:16, OrigData:16>>} ->
+			{ok, OrigData};
+		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Start:16, Data:16>>} ->
+			{ok, Data};
 		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Size, Data:Size/binary>>} ->
 			{ok, Data};
 		Junk -> io:format("Junk: ~w~n", [Junk]), {error,junk}

@@ -14,6 +14,7 @@
 	binary_to_int32s/1,
 	binary_to_float32/1,
 	binary_to_ascii/1,
+	coils_to_binary/1,
 	int16_to_binary/1
 ]).
 
@@ -59,7 +60,19 @@ binary_to_float32(Bin) ->
 binary_to_ascii(Bin) ->
 	erlang:binary_to_list(Bin).
 
-%% @private
+%% @doc Function to convert a list of coils to binary.
+%% @end
+-spec coils_to_binary(Values::list()) -> binary().
+coils_to_binary(Values) ->
+	coils_to_binary(Values, <<>>).
+
+coils_to_binary([], Acc) ->
+	Acc;
+coils_to_binary([B0, B1, B2, B3, B4, B5, B6, B7 | T], Acc) ->
+	coils_to_binary(T, <<Acc/binary, B7:1, B6:1, B5:1, B4:1, B3:1, B2:1, B1:1, B0:1>>);
+coils_to_binary(Values, Acc) ->
+	coils_to_binary(Values ++ [0], Acc).
+
 %% @doc Function to convert a list of 16bits integer to binary.
 %% @end
 -spec int16_to_binary(Values::list()) -> binary().

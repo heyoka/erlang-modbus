@@ -102,3 +102,21 @@ Otherwise you can specify a list of  memory positions you want to read. This wil
 Result = modbus:read_memory(Pid, ["%MD0.6", "%MW0.4", "%MX0.0.0", "%MW0.1"]).
 ok = modbus:disconnect(Pid).
 ```
+
+### Writing memory positions ###
+
+To write a memory position you just need to create a connection and specify the memory position and the value you want to write.
+
+```
+{ok, Pid} = modbus:connect("127.0.0.1", 502, 1).
+ok = modbus:write_memory(Pid, "%MX0.34.5", 1).
+ok = modbus:disconnect(Pid).
+```
+
+Otherwise you can specify a list of  `{MemoryPosition, Value}` you want to write.
+
+```
+{ok, Pid} = modbus:connect("127.0.0.1", 502, 1).
+ok = modbus:write_memory(Pid, [{"%MD0.6", -12.89}, {"%MW0.4", 16}, {"%MX0.0.0", 1}, {"%MW0.1", 8374}]).
+ok = modbus:disconnect(Pid).
+```

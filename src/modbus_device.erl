@@ -97,7 +97,7 @@ handle_call({write_coil, Start, Data}, _From, State) ->
 		data = NewData
 	},
 
-	{ok, _Data} = send_and_receive(NewState),
+	{ok, NewData} = send_and_receive(NewState),
 	{reply, ok, NewState};
 
 handle_call({write_coils, Start, Data}, _From, State) ->
@@ -108,7 +108,10 @@ handle_call({write_coils, Start, Data}, _From, State) ->
 		data = Data
 	},
 
-	Length = length(Data),
+	Length = if 
+		is_list(Data) -> length(Data);
+		is_binary(Data) -> bit_size(Data)
+	end,
 	{ok, Length} = send_and_receive(NewState),
 	{reply, ok, NewState};
 
@@ -120,7 +123,7 @@ handle_call({write_hreg, Start, Data}, _From, State) ->
 		data = Data
 	},
 
-	{ok, _Data} = send_and_receive(NewState),
+	{ok, Data} = send_and_receive(NewState),
 	{reply, ok, NewState};
 
 handle_call({write_hregs, Start, Data}, _From, State) ->
@@ -168,11 +171,21 @@ send_and_receive(State) ->
 %% @doc Function to generate  the request message from State.
 %% @end
 -spec generate_request(State::#tcp_request{}) -> binary().
-generate_request(#tcp_request{tid = Tid, address = Address, function = ?FC_WRITE_COILS, start = Start, data = Data}) ->
+generate_request(#tcp_request{tid = Tid, address = Address, function = ?FC_WRITE_COILS,
+	start = Start, data = Data}) when is_list(Data) ->
 	Length = length(Data),
 	NewData = modbus_util:coils_to_binary(Data),
 	ByteSize = byte_size(NewData),
 	Message = <<Address:8, ?FC_WRITE_COILS:8, Start:16, Length:16, ByteSize:8, NewData/binary>>,
+
+	Size = byte_size(Message),
+	<<Tid:16, 0:16, Size:16, Message/binary>>;
+
+generate_request(#tcp_request{tid = Tid, address = Address, function = ?FC_WRITE_COILS,
+	start = Start, data = Data}) when is_binary(Data) ->
+	Length = bit_size(Data),
+	ByteSize = byte_size(Data),
+	Message = <<Address:8, ?FC_WRITE_COILS:8, Start:16, Length:16, ByteSize:8, Data/binary>>,
 
 	Size = byte_size(Message),
 	<<Tid:16, 0:16, Size:16, Message/binary>>;
@@ -195,8 +208,7 @@ generate_request(#tcp_request{tid = Tid, address = Address, function = Code, sta
 %% @doc Function to validate the response header and get the data from the tcp socket.
 %% @end
 -spec get_response(State::#tcp_request{}) -> ok | {error, term()}.
-get_response(#tcp_request{sock = Socket, tid = Tid, address = Address, function = Code,
-			start = Start, data = OrigData}) ->
+get_response(#tcp_request{sock = Socket, tid = Tid, address = Address, function = Code, start = Start}) ->
 	BadCode = Code + 128,
 
 	case gen_tcp:recv(Socket, 0) of
@@ -214,8 +226,6 @@ get_response(#tcp_request{sock = Socket, tid = Tid, address = Address, function 
 				11 -> {error, failed_to_response};
 				_  -> {error, unknown_response_code}
 			end;
-		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Start:16, OrigData:16>>} ->
-			{ok, OrigData};
 		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Start:16, Data:16>>} ->
 			{ok, Data};
 		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Size, Data:Size/binary>>} ->

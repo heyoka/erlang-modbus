@@ -20,7 +20,9 @@
 	write_coil/3,
 	write_coils/3,
 	write_hreg/3,
-	write_hregs/3
+	write_hregs/3,
+	write_memory/2,
+	write_memory/3
 ]).
 
 -define(TIMEOUT, 3000).
@@ -198,7 +200,6 @@ read_memory(Pid, List) ->
 				Acc;
 			{Reg, Offset, MemList} ->
 				Data = gen_server:call(Pid, {read_coils, Reg, Offset, [{output, binary}]}),
-				BinaryData = erlang:list_to_binary(Data),
 				{ResultList, _} = lists:foldl( fun(Mem, {MemAcc, DataAcc}) ->
 					case Mem of
 						"%MD0." ++ _ ->
@@ -223,8 +224,103 @@ read_memory(Pid, List) ->
 							end, {[], MxResultList}, lists:reverse(MxList)),
 							{MemAcc ++ FinalMxList, DataTail}
 					end
-				end, {Acc, BinaryData}, lists:reverse(MemList)),
+				end, {Acc, Data}, lists:reverse(MemList)),
 				ResultList
 		end
 	end, [], ReqList).
+
+
+%% @doc Function to write a memory position from the modbus device.
+%% @end
+-spec write_memory(Pid::pid(), string(), Data::term()) -> number() | [number()].
+write_memory(Pid, "%MD0." ++ PosNum, Data) ->
+	Reg = erlang:list_to_integer(PosNum) *32,
+	gen_server:call(Pid, {write_coils, Reg, <<Data:32/float>>});
+
+write_memory(Pid, "%MW0." ++ PosNum, Data) ->
+	Reg = erlang:list_to_integer(PosNum) *16,
+	gen_server:call(Pid, {write_coils, Reg, <<Data:16/integer>>});
+
+write_memory(Pid, "%MB0." ++ PosNum, Data) ->
+	Reg = erlang:list_to_integer(PosNum) *8,
+	gen_server:call(Pid, {write_coils, Reg, <<Data:8/integer>>});
+
+write_memory(Pid, "%MX0." ++ PosNum, Data) ->
+	[Word, Bit] = string:tokens(PosNum, "."),
+	Reg = erlang:list_to_integer(Word) * 8 + erlang:list_to_integer(Bit),
+	gen_server:call(Pid, {write_coil, Reg, Data}).
+
+
+%% @doc Function to request a list of memory positions from the modbus device.
+%% @end
+-spec write_memory(Pid::pid(), list()) -> [{string(), number()}].
+write_memory(Pid, List) ->
+	NewList  = lists:foldl( fun(Elem, Acc) ->
+		case Elem of
+			{"%MD0." ++ PosNum = Mem, Value} ->
+				Reg = erlang:list_to_integer(PosNum) *32,
+				[{Reg, Mem, Value} | Acc];
+			{"%MW0." ++ PosNum = Mem, Value} ->
+				Reg = erlang:list_to_integer(PosNum) *16,
+				[{Reg, Mem, Value} | Acc];
+			{"%MB0." ++ PosNum = Mem, Value} ->
+				Reg = erlang:list_to_integer(PosNum) *8,
+				[{Reg, Mem, Value} | Acc];
+			{"%MX0." ++ PosNum = Mem, Value} ->
+				[Word, Bit] = string:tokens(PosNum, "."),
+				Reg = erlang:list_to_integer(Word) * 8 + erlang:list_to_integer(Bit),
+				[{Reg, Mem, Value} | Acc]
+		end
+	end, [], List),
+
+	ReqList = lists:foldl( fun(Elem, [{RegAcc, OffsetAcc, BinAcc} |Acc]) ->
+		NewRegAcc = RegAcc + OffsetAcc,
+		case Elem of
+			{NewRegAcc, "%MD0." ++ _, Value} ->
+				case BinAcc of
+					[_|_] ->
+						[{NewRegAcc, 32, <<Value:32/float>>}, {RegAcc, OffsetAcc, BinAcc} | Acc];
+					<<_/binary>> ->
+						[{RegAcc, OffsetAcc +32, <<BinAcc/binary, Value:32/float>>} | Acc]
+				end;
+			{NewRegAcc, "%MW0." ++ _, Value} ->
+				case BinAcc of
+					[_|_] ->
+						[{NewRegAcc, 16, <<Value:16/integer>>}, {RegAcc, OffsetAcc, BinAcc} | Acc];
+					<<_/binary>> ->
+						[{RegAcc, OffsetAcc +16, <<BinAcc/binary, Value:16/integer>>} | Acc]
+				end;
+			{NewRegAcc, "%MB0." ++ _, Value} ->
+				case BinAcc of
+					[_|_] ->
+						[{NewRegAcc, 8, <<Value:8/integer>>}, {RegAcc, OffsetAcc, BinAcc} | Acc];
+					<<_/binary>> ->
+						[{RegAcc, OffsetAcc +8, <<BinAcc/binary, Value:8/integer>>} | Acc]
+				end;
+			{NewRegAcc, "%MX0." ++ _, Value} ->
+				case BinAcc of
+					[_|_] ->
+						[{RegAcc, OffsetAcc +1, BinAcc ++ [Value]} | Acc];
+					<<_/binary>> ->
+						[{NewRegAcc, 1, [Value]}, {RegAcc, OffsetAcc, BinAcc} | Acc]
+				end;
+			{Reg, "%MD0." ++ _, Value} ->
+				[{Reg, 32, <<Value:32/float>>}, {RegAcc, OffsetAcc, BinAcc} | Acc];
+			{Reg, "%MW0." ++ _, Value} ->
+				[{Reg, 16, <<Value:16/integer>>}, {RegAcc, OffsetAcc, BinAcc} | Acc];
+			{Reg, "%MB0." ++ _, Value} ->
+				[{Reg, 8, <<Value:8/integer>>}, {RegAcc, OffsetAcc, BinAcc} | Acc];
+			{Reg, "%MX0." ++ _, Value} ->
+				[{Reg, 1, [Value]}, {RegAcc, OffsetAcc, BinAcc} | Acc]
+		end
+	end, [{0, 0, <<>>}], lists:usort(NewList)),
+
+	lists:map( fun(Elem) ->
+		case Elem of 
+			{0, 0, <<>>} ->
+				ok;
+			{Reg, _Offset, BinAcc} ->
+				ok = gen_server:call(Pid, {write_coils, Reg, BinAcc})
+		end
+	end, ReqList), ok.
 

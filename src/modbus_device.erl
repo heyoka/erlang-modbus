@@ -4,188 +4,18 @@
 %% @doc A way to interact with modbus-tcp devices on an ethernet network
 
 -module(modbus_device).
--author('Caleb Tennis <caleb.tennis@gmail.com>').
-
-%% Public API
--export([
-	connect/3,
-	disconnect/1,
-	read_coils/3,
-	read_inputs/3,
-	read_ireg/3,
-	read_hreg/3,
-	read_memory/2,
-	read_memory/3,
-	write_hreg/3
-]).
-
-%% Internal API (gen_server)
+-behavior(gen_server).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3, terminate/2]).
 
 -include("modbus.hrl").
--behavior(gen_server).
-
--define(TIMEOUT, 3000).
-
-%% @doc Function to connect with the modbus device.
-%% @end
--spec connect(Host::string(), Port::integer(), DeviceAddr::integer()) -> {ok, pid()} | {error, term()}.
-connect(Host, Port, DeviceAddr) ->
-	gen_server:start(modbus_device, [Host, Port, DeviceAddr],[{timeout, ?TIMEOUT}]).
-
-%% @doc Function to disconnect the modbus device.
-%% @end
--spec disconnect(Pid::pid()) -> ok.
-disconnect(Pid) ->
-	gen_server:cast(Pid, stop).
-
-%% @doc Function to request coils from the modbus device.
-%% @end
--spec read_coils(Pid::pid(), Start::integer(), Offset::integer()) -> integer() | [integer()].
-read_coils(Pid, Start, Offset) ->
-	gen_server:call(Pid, {read_coils, Start, Offset}).
-
-%% @doc Function to request inputs from the modbus device.
-%% @end
--spec read_inputs(Pid::pid(), Start::integer(), Offset::integer()) -> integer() | [integer()].
-read_inputs(Pid, Start, Offset) ->
-	gen_server:call(Pid, {read_inputs, Start, Offset}).
-
-%% @doc Function to request holding registers from the modbus device.
-%% @end
--spec read_hreg(Pid::pid(), Start::integer(), Offset::integer()) -> integer() | [integer()].
-read_hreg(Pid, Start, Offset) ->
-	gen_server:call(Pid, {read_hreg, Start, Offset}).
-
-%% @doc Function to request input registers from the modbus device.
-%% @end
--spec read_ireg(Pid::pid(), Start::integer(), Offset::integer()) -> integer() | [integer()].
-read_ireg(Pid, Start, Offset) ->
-	gen_server:call(Pid, {read_ireg, Start, Offset}).
-
-%% @doc Function to write data on holding registers from the modbus device.
-%% @end
--spec write_hreg(Pid::pid(), Start::integer(), Value::integer()) -> term().
-write_hreg(Pid, Start, Value) ->
-	gen_server:call(Pid, {write_hreg, Start, Value }).
-
-%% @doc Function to request a memory position from the modbus device.
-%% @end
--spec read_memory(Pid::pid(), string(), Offset::integer()) -> number() | [number()].
-read_memory(Pid, "%MD" ++ PosNum, Offset) ->
-	[Line, Word] = string:tokens(PosNum, "."),
-	Reg = erlang:list_to_integer(Line) * 32768 + erlang:list_to_integer(Word) *2,
-	Result = gen_server:call(Pid, {read_hreg, Reg, Offset *2}),
-	words_to_float(Result);
-
-read_memory(Pid, "%MW" ++ PosNum, Offset) ->
-	[Line, Word] = string:tokens(PosNum, "."),
-	Reg = erlang:list_to_integer(Line) * 32768 + erlang:list_to_integer(Word),
-	gen_server:call(Pid, {read_hreg, Reg, Offset});
-
-read_memory(Pid, "%MB0." ++ PosNum, Offset) ->
-	Reg = erlang:list_to_integer(PosNum),
-	gen_server:call(Pid, {read_raw, Reg *8, Offset *8});
-	
-read_memory(Pid, "%MX0." ++ PosNum, Offset) ->
-	[Word, Bit] = string:tokens(PosNum, "."),
-	Reg = erlang:list_to_integer(Word) * 8 + erlang:list_to_integer(Bit),
-	gen_server:call(Pid, {read_coils, Reg, Offset}).
-
-%% @doc Function to request a list of memory positions from the modbus device.
-%% @end
--spec read_memory(Pid::pid(), list()) -> [{string(), number()}].
-read_memory(Pid, "%M" ++ _ = MemPosition) ->
-	read_memory(Pid, MemPosition, 1);
-
-read_memory(Pid, List) ->
-	NewList  = lists:foldl( fun(Elem, Acc) ->
-		case Elem of
-			"%MD0." ++ PosNum ->
-				Reg = erlang:list_to_integer(PosNum) *32,
-				[{Reg, Elem} | Acc];
-			"%MW0." ++ PosNum ->
-				Reg = erlang:list_to_integer(PosNum) *16,
-				[{Reg, Elem} | Acc];
-			"%MB0." ++ PosNum ->
-				Reg = erlang:list_to_integer(PosNum) *8,
-				[{Reg, Elem} | Acc];
-			"%MX0." ++ PosNum ->
-				[Word, Bit] = string:tokens(PosNum, "."),
-				Reg = erlang:list_to_integer(Word) * 8 + erlang:list_to_integer(Bit),
-				[{Reg, Elem} | Acc]
-		end
-	end, [], List),
-
-	ReqList = lists:foldl( fun(Elem, [{RegAcc, OffsetAcc, MemAcc} |Acc]) ->
-		NewRegAcc = RegAcc + OffsetAcc,
-		case Elem of
-			{NewRegAcc, "%MD0." ++ _ = MemPosition} ->
-				[{RegAcc, OffsetAcc +32, MemAcc ++ [MemPosition]} | Acc];
-			{NewRegAcc, "%MW0." ++ _ = MemPosition} ->
-				[{RegAcc, OffsetAcc +16, MemAcc ++ [MemPosition]} | Acc];
-			{NewRegAcc, "%MB0." ++ _ = MemPosition} ->
-				[{RegAcc, OffsetAcc +8, MemAcc ++ [MemPosition]} | Acc];
-			{NewRegAcc, MemPosition} ->
-				[{RegAcc, OffsetAcc +1, MemAcc ++ [MemPosition]} | Acc];
-			{Reg, "%MD0." ++ _ = MemPosition} ->
-				[{Reg, 32, [MemPosition]}, {RegAcc, OffsetAcc, MemAcc} | Acc];
-			{Reg, "%MW0." ++ _ = MemPosition} ->
-				[{Reg, 16, [MemPosition]}, {RegAcc, OffsetAcc, MemAcc} | Acc];
-			{Reg, "%MB0." ++ _ = MemPosition} ->
-				[{Reg, 8, [MemPosition]}, {RegAcc, OffsetAcc, MemAcc} | Acc];
-			{Reg, MemPosition} ->
-				[{Reg, 1, [MemPosition]}, {RegAcc, OffsetAcc, MemAcc} | Acc]
-		end
-	end, [{0, 0, []}], lists:usort(NewList)),
-
-	lists:foldl( fun(Elem, Acc) ->
-		case Elem of 
-			{0, 0, []} ->
-				Acc;
-			{Reg, Offset, MemList} ->
-				Data = gen_server:call(Pid, {read_raw, Reg, Offset}),
-				BinaryData = erlang:list_to_binary(Data),
-				{ResultList, _} = lists:foldl( fun(Mem, {MemAcc, DataAcc}) ->
-					case Mem of
-						"%MD0." ++ _ ->
-							<<Result:32/float, DataTail/binary>> = DataAcc,
-							{MemAcc ++ [{Mem, Result}], DataTail};
-						"%MW0." ++ _ ->
-							<<Result:16/integer, DataTail/binary>> = DataAcc,
-							{MemAcc ++ [{Mem, Result}], DataTail};
-						"%MB0." ++ _ ->
-							<<Result:8/integer, DataTail/binary>> = DataAcc,
-							{MemAcc ++ [{Mem, Result}], DataTail};
-						"%MX0." ++ _ ->
-							case DataAcc of
-								<<>> ->
-									Result = 0,
-									DataTail = <<>>;
-							 	_ ->
-									<<Result:8, DataTail/binary>> = DataAcc
-							end,
-							[FinalResult |ResultTail] = erlang:integer_to_list(Result, 2),
-							FinalDataTail = case ResultTail of
-								[] ->
-									DataTail;
-								_ ->
-									NewResultTail = erlang:list_to_integer(ResultTail, 2),
-									<<NewResultTail:8, DataTail/binary>>
-							end,
-							{MemAcc ++ [{Mem, erlang:list_to_integer([FinalResult])}], FinalDataTail}
-					end
-				end, {Acc, BinaryData}, MemList),
-				ResultList
-		end
-	end, [], ReqList).
 
 
-%% Internal API (gen_server)
-%% ===== ===== ===== ===== ===== ===== ===== ===== =====
+%%% %%% -------------------------------------------------------------------
+%% ModbusTCP gen_server API
+%%% %%% -------------------------------------------------------------------
 
 init([Host, Port, DeviceAddr]) ->
-	Retval = gen_tcp:connect(Host, Port, [{active,false}, {packet, 0}]),
+	Retval = gen_tcp:connect(Host, Port, [binary, {active,false}, {packet, 0}]),
 
 	case Retval of
 		{ok, Sock} ->
@@ -195,92 +25,118 @@ init([Host, Port, DeviceAddr]) ->
 			{stop, {error, ErrorType}}
 	end.
 
-handle_call({read_coils, Start, Offset}, _From, State) ->
+handle_call({read_coils, Start, Offset, Opts}, _From, State) ->
 	NewState = State#tcp_request{
 		tid = State#tcp_request.tid +1,
 		function = ?FC_READ_COILS,
 		start = Start,
 		data = Offset
 	},
+
 	{ok, Data} = send_and_receive(NewState),
-
-	FinalData = case lists:split(Offset, bytes_to_bits(Data)) of
-		{[Result], _} -> Result;
-		{Result, _} -> Result
+	FinalData = case output(Data, Opts, coils) of
+		Result when length(Result) > Offset ->
+			{ResultHead, _} = lists:split(Offset, Result),
+			ResultHead;
+		Result -> Result
 	end,
-
 	{reply, FinalData, NewState};
 
-handle_call({read_inputs, Start, Offset}, _From, State) ->
+handle_call({read_inputs, Start, Offset, Opts}, _From, State) ->
 	NewState = State#tcp_request{
 		tid = State#tcp_request.tid +1,
 		function = ?FC_READ_INPUTS,
 		start = Start,
 		data = Offset
 	},
+
 	{ok, Data} = send_and_receive(NewState),
-
-	FinalData = case lists:split(Offset, bytes_to_bits(Data)) of
-		{[Result], _} -> Result;
-		{Result, _} -> Result
+	FinalData = case output(Data, Opts, coils) of
+		Result when length(Result) > Offset ->
+			{ResultHead, _} = lists:split(Offset, Result),
+			ResultHead;
+		Result -> Result
 	end,
-
 	{reply, FinalData, NewState};
 
 
-handle_call({read_hreg, Start, Offset}, _From, State) ->
+handle_call({read_hregs, Start, Offset, Opts}, _From, State) ->
 	NewState = State#tcp_request{
 		tid = State#tcp_request.tid +1,
 		function = ?FC_READ_HREGS,
 		start = Start,
 		data = Offset
 	},
+
 	{ok, Data} = send_and_receive(NewState),
-
-	FinalData = bytes_to_words(Data),
-
+	FinalData = output(Data, Opts, int16),
 	{reply, FinalData, NewState};
 
-handle_call({read_ireg,Start, Offset}, _From, State) ->
+handle_call({read_iregs,Start, Offset, Opts}, _From, State) ->
 	NewState = State#tcp_request{
 		tid = State#tcp_request.tid +1,
 		function = ?FC_READ_IREGS,
 		start = Start,
 		data = Offset
 	},
+
 	{ok, Data} = send_and_receive(NewState),
-
-	FinalData = bytes_to_words(Data),
-
+	FinalData = output(Data, Opts, int16),
 	{reply, FinalData, NewState};
 
-handle_call({read_raw, Start, Offset}, _From, State) ->
+handle_call({write_coil, Start, Data}, _From, State) ->
+	<<NewData:16>> = case Data of
+		0 -> <<16#0000:16>>;
+		1 -> <<16#ff00:16>>
+	end,
+
 	NewState = State#tcp_request{
 		tid = State#tcp_request.tid +1,
-		function = ?FC_READ_COILS,
+		function = ?FC_WRITE_COIL,
 		start = Start,
-		data = Offset
+		data = NewData
 	},
+
+	{ok, NewData} = send_and_receive(NewState),
+	{reply, ok, NewState};
+
+handle_call({write_coils, Start, Data}, _From, State) ->
+	NewState = State#tcp_request{
+		tid = State#tcp_request.tid +1,
+		function = ?FC_WRITE_COILS,
+		start = Start,
+		data = Data
+	},
+
+	Length = if 
+		is_list(Data) -> length(Data);
+		is_binary(Data) -> bit_size(Data)
+	end,
+	{ok, Length} = send_and_receive(NewState),
+	{reply, ok, NewState};
+
+handle_call({write_hreg, Start, Data}, _From, State) ->
+	NewState = State#tcp_request{
+		tid = State#tcp_request.tid +1,
+		function = ?FC_WRITE_HREG,
+		start = Start,
+		data = Data
+	},
+
 	{ok, Data} = send_and_receive(NewState),
+	{reply, ok, NewState};
 
-	{reply, Data, NewState};
-
-handle_call({write_hreg, Start, OrigData}, From, State) when is_integer(OrigData) ->
-	handle_call({write_hreg, Start, [OrigData]}, From, State);
-
-handle_call({write_hreg, Start, OrigData}, _From, State) ->
+handle_call({write_hregs, Start, Data}, _From, State) ->
 	NewState = State#tcp_request{
 		tid = State#tcp_request.tid +1,
 		function = ?FC_WRITE_HREGS,
 		start = Start,
-		data = OrigData
+		data = Data
 	},
 
-	{ok, [_Address,_FunctionCode|Data]} = send_and_receive(NewState),
-
-	[FinalData] = bytes_to_words(Data),
-
-	{reply, FinalData, NewState}.
+	Length = length(Data),
+	{ok, Length} = send_and_receive(NewState),
+	{reply, ok, NewState}.
 
 
 handle_cast(stop, State) ->
@@ -304,61 +160,94 @@ code_change(_OldVsn, State, _Extra) ->
 %% Util
 %%% %%% -------------------------------------------------------------------
 
+%% @doc Function to send the request and get the response.
+%% @end
+-spec send_and_receive(State::#tcp_request{}) -> {ok, binary()}.
 send_and_receive(State) ->
+	Message =  generate_request(State),
+	ok = gen_tcp:send(State#tcp_request.sock, Message),
+	{ok, _Data} = get_response(State).
 
-	ok = modbus:send_request_message(State),
-	ok = modbus:get_response_header(State),
-	{ok, _Data} = modbus:get_response_data(State).
-
-%% @private
-%% @doc Function to convert bytes to bits.
+%% @doc Function to generate  the request message from State.
 %% @end
--spec bytes_to_bits(Bytes::list()) -> float().
-bytes_to_bits(Bytes) when is_integer(Bytes) ->
-	Bits = erlang:integer_to_list(Bytes, 2),
-	List = lists:foldl( fun(Elem, Acc) ->
-						 Acc ++ [erlang:list_to_integer([Elem])]
-				 end, [], Bits),
-	List ++ lists:duplicate(8 - length(List), 0);
+-spec generate_request(State::#tcp_request{}) -> binary().
+generate_request(#tcp_request{tid = Tid, address = Address, function = ?FC_WRITE_COILS,
+	start = Start, data = Data}) when is_list(Data) ->
+	Length = length(Data),
+	NewData = modbus_util:coils_to_binary(Data),
+	ByteSize = byte_size(NewData),
+	Message = <<Address:8, ?FC_WRITE_COILS:8, Start:16, Length:16, ByteSize:8, NewData/binary>>,
 
-bytes_to_bits(Bytes) ->
-	bytes_to_bits(Bytes, []).
+	Size = byte_size(Message),
+	<<Tid:16, 0:16, Size:16, Message/binary>>;
 
-%% @hidden
-bytes_to_bits([], Acc) ->
-	Acc;
-bytes_to_bits([Byte | MoreBytes], Acc) ->
-	bytes_to_bits(MoreBytes, Acc ++ bytes_to_bits(Byte)).
+generate_request(#tcp_request{tid = Tid, address = Address, function = ?FC_WRITE_COILS,
+	start = Start, data = Data}) when is_binary(Data) ->
+	Length = bit_size(Data),
+	ByteSize = byte_size(Data),
+	Message = <<Address:8, ?FC_WRITE_COILS:8, Start:16, Length:16, ByteSize:8, Data/binary>>,
 
-%% @private
-%% @doc Function to convert bytes to words.
+	Size = byte_size(Message),
+	<<Tid:16, 0:16, Size:16, Message/binary>>;
+
+generate_request(#tcp_request{tid = Tid, address = Address, function = ?FC_WRITE_HREGS, start = Start, data = Data}) ->
+	Length = length(Data),
+	NewData = modbus_util:int16_to_binary(Data),
+	ByteSize = byte_size(NewData),
+	Message = <<Address:8, ?FC_WRITE_HREGS:8, Start:16, Length:16, ByteSize:8, NewData/binary>>,
+
+	Size = size(Message),
+	<<Tid:16, 0:16, Size:16, Message/binary>>;
+
+generate_request(#tcp_request{tid = Tid, address = Address, function = Code, start = Start, data = Data}) ->
+	Message = <<Address:8, Code:8, Start:16, Data:16>>,
+	Size = size(Message),
+	<<Tid:16, 0:16, Size:16, Message/binary>>.
+
+
+%% @doc Function to validate the response header and get the data from the tcp socket.
 %% @end
--spec bytes_to_words(Bytes::list()) -> float().
-bytes_to_words(Bytes) ->
-	bytes_to_words(Bytes,[]).
+-spec get_response(State::#tcp_request{}) -> ok | {error, term()}.
+get_response(#tcp_request{sock = Socket, tid = Tid, address = Address, function = Code, start = Start}) ->
+	BadCode = Code + 128,
 
-%% @hidden
-bytes_to_words([],[Acc])->
-	Acc;  
-bytes_to_words([],Acc)->
-	Acc;  
-bytes_to_words([Byte1, Byte2 | Tail], Acc) ->
-	<<Value:16/integer>> = <<Byte1:8, Byte2:8>>,
-	bytes_to_words(Tail,Acc ++ [Value]).
+	case gen_tcp:recv(Socket, 0) of
+		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, BadCode, ErrorCode>>} ->
+			case ErrorCode of
+				1  -> {error, illegal_function};
+				2  -> {error, illegal_data_address};
+				3  -> {error, illegal_data_value};
+				4  -> {error, slave_device_failure};
+				5  -> {error, acknowledge};
+				6  -> {error, slave_device_busy};
+				7  -> {error, negative_ack};
+				8  -> {error, memory_parity};
+				10 -> {error, path_unavailable};
+				11 -> {error, failed_to_response};
+				_  -> {error, unknown_response_code}
+			end;
+		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Start:16, Data:16>>} ->
+			{ok, Data};
+		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Size, Data:Size/binary>>} ->
+			{ok, Data};
+		Junk -> io:format("Junk: ~w~n", [Junk]), {error,junk}
+	end.
 
-%% @private
-%% @doc Function to convert words to a float number.
+%% @doc Function convert data to the selected output.
 %% @end
--spec words_to_float(List::list()) -> float().
-words_to_float(List) ->
-	words_to_float(List, []).
-
-%% @hidden
-words_to_float([], [Acc]) ->
-	Acc;
-words_to_float([], Acc) ->
-	Acc;
-words_to_float([H1, H2 | Tail], Acc) ->
-	<<Value:32/float>> = <<H1:16, H2:16>>,
-	words_to_float(Tail, Acc ++ [Value]).
+-spec output(Data::binary(), Opts::list(), Default::atom()) -> list().
+output(Data, Opts, Default) ->
+	Output = proplists:get_value(output, Opts, Default),
+	Signed = proplists:get_value(signed, Opts, false),
+	case {Output, Signed} of
+		{int16, false} -> modbus_util:binary_to_int16(Data);
+		{int16, true} -> modbus_util:binary_to_int16s(Data);
+		{int32, false} -> modbus_util:binary_to_int32(Data);
+		{int32, true} -> modbus_util:binary_to_int32s(Data);
+		{float32, _} -> modbus_util:binary_to_float32(Data);
+		{coils, _} -> modbus_util:binary_to_coils(Data);
+		{ascii, _} -> modbus_util:binary_to_ascii(Data);
+		{binary, _} -> Data;
+		_ -> Data
+	end.
 

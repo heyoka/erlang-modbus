@@ -230,6 +230,8 @@ get_response(#tcp_request{sock = Socket, tid = Tid, address = Address, function 
 			{ok, Data};
 		{ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Size, Data:Size/binary>>} ->
 			{ok, Data};
+		{error, closed} -> {error, closed};
+		{error, Reason} -> {error, Reason};
 		Junk -> io:format("Junk: ~w~n", [Junk]), {error,junk}
 	end.
 

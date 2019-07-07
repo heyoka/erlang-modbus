@@ -1,3 +1,5 @@
+%% available modbus functions
+
 -define(FC_READ_COILS,    16#01).
 -define(FC_READ_INPUTS,   16#02).
 -define(FC_READ_HREGS,    16#03).
@@ -7,4 +9,5 @@
 -define(FC_WRITE_COILS,   16#0f).
 -define(FC_WRITE_HREGS,   16#10).
 
+%% tcp request record
 -record(tcp_request, {sock, tid = 1, address = 1, function, start, data }).

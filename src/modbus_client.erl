@@ -34,6 +34,9 @@
 -define(CONN_TIMEOUT, 3000).
 
 
+-define(HANDLE_COMMON,
+   ?FUNCTION_NAME(T, C, D) -> handle_common(T, C, D)).
+
 -record(state, {
    port = 8899           :: non_neg_integer(),
    host = "localhost"   :: inet:ip_address() | string(),
@@ -141,30 +144,70 @@ disconnected(info, {reconnect, timeout}, State) ->
    logger:info("reconnect_timeout in disconnected!"),
    connect(State).
 
+
 %% connect
 connected(info, {tcp_closed, _Socket}, State) ->
    try_reconnect(tcp_closed, State);
 
-connected({call, From}, ModbusEvent, State) ->
-   logger:notice("Unexpected call from: ~p: ~p when connected", [From, ModbusEvent]),
-   {next_state, connected, State, [{reply, From, ModbusEvent}]};
+%%%%%%%%%%%%%%%% read functions %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+connected({call, _From}, {read_coils, _Start, Offset, _Opts} = RO, State) ->
+   Req = read_request(State, RO, ?FC_READ_COILS),
+   read_coils(Req, erlang:delete_element(1, RO), Offset, State);
 
-connected({call, _From}, {read_coils, Start, Offset, Opts}, State) ->
-   Req0 = request(State),
-   Req = Req0#tcp_request{
-      function = ?FC_READ_COILS,
-      start = Start,
-      data = Offset
-   },
+connected({call, _From}, {read_inputs, _Start, Offset, _Opts} = RO, State) ->
+   Req = read_request(State, RO, ?FC_READ_INPUTS),
+   read_coils(Req, erlang:delete_element(1, RO), Offset, State);
+
+connected({call, _From}, {read_hregs, _Start, _Offset, Opts} = RO, State) ->
+   Req = read_request(State, RO, ?FC_READ_HREGS),
+   read_regs(Req, Opts, State);
+
+connected({call, _From}, {read_iregs, _Start, _Offset, Opts} = RO, State) ->
+   Req = read_request(State, RO, ?FC_READ_HREGS),
+   read_regs(Req, Opts, State);
+
+%%%%%%%%%%%% write functions %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+connected({call, From}, {write_coil, Start, Data}, State) ->
+   <<NewData:16>> = case Data of
+                       0 -> <<16#0000:16>>;
+                       1 -> <<16#ff00:16>>
+                    end,
+   Req = write_request(State, {write_coil, Start, NewData}, ?FC_WRITE_COIL),
+
+   {ok, NewData} = send_and_receive(Req),
+   {keep_state, State#state{tid = Req#tcp_request.tid}, [{reply, From, ok}]};
+
+connected({call, From}, {write_coils, _Start, Data} = RO, State) ->
+   Req = write_request(State, RO, ?FC_WRITE_COILS),
+
+   Length = if
+               is_list(Data) -> length(Data);
+               is_binary(Data) -> bit_size(Data)
+            end,
+   {ok, Length} = send_and_receive(Req),
+   {keep_state, State#state{tid = Req#tcp_request.tid}, [{reply, From, ok}]};
+
+connected({call, From}, {write_hreg, _Start, Data} = RO, State) ->
+   Req = write_request(State, RO, ?FC_WRITE_HREG),
 
    {ok, Data} = send_and_receive(Req),
-   FinalData = case output(Data, Opts, coils) of
-                  Result when length(Result) > Offset ->
-                     {ResultHead, _} = lists:split(Offset, Result),
-                     ResultHead;
-                  Result -> Result
-               end,
-   {reply, FinalData, State#state{tid = Req#tcp_request.tid}}.
+   {keep_state, State#state{tid = Req#tcp_request.tid}, [{reply, From, ok}]};
+
+connected({call, From}, {write_hregs, _Start, Data} = RO, State) ->
+   Req = write_request(State, RO, ?FC_WRITE_HREGS),
+
+   Length = length(Data),
+   {ok, Length} = send_and_receive(Req),
+   {keep_state, State#state{tid = Req#tcp_request.tid}, [{reply, From, ok}]}.
+
+%%?HANDLE_COMMON.
+
+%%connected({call, From}, _E, _State) ->
+%%   logger:notice("Unexpected call from: ~p: ~p when connected", [From, _E]),
+%%   keep_state_and_data.
+
+handle_common({call,From}, _Event, State) ->
+   {keep_state, State, [{reply, From, {error, unsupported_call}}]}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -195,8 +238,11 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-request(#state{socket = Sock, tid = Tid, device_address = Address}) ->
-   #tcp_request{sock = Sock, tid = Tid+1, address = Address}.
+write_request(#state{socket = Sock, tid = Tid, device_address = Address}, {_Type, Start, Data}, Function) ->
+   #tcp_request{sock = Sock, tid = Tid+1, address = Address, start = Start, data = Data, function = Function}.
+
+read_request(#state{socket = Sock, tid = Tid, device_address = Address}, {_Type, Start, Offset, _Opts}, Function) ->
+   #tcp_request{sock = Sock, tid = Tid+1, address = Address, data = Offset, start = Start, function = Function}.
 
 connect(State = #state{host = Host, port = Port, recipient = Rec}) ->
    logger:info("[Client: ~p] connecting to ~s:~p",[?MODULE, Host, Port]),
@@ -221,13 +267,31 @@ try_reconnect(Reason, State = #state{reconnector = Reconnector}) ->
    end.
 
 
+
+%%%%
+read_coils(Request, Opts, Offset, State) ->
+   {ok, Data} = send_and_receive(Request),
+   FinalData = case output(Data, Opts, coils) of
+                  Result when length(Result) > Offset ->
+                     {ResultHead, _} = lists:split(Offset, Result),
+                     ResultHead;
+                  Result -> Result
+               end,
+   {next_state, connected, State#state{tid = Request#tcp_request.tid}, [{reply, _From, FinalData}]}.
+
+read_regs(Req, Opts, State) ->
+   {ok, Data} = send_and_receive(Req),
+   FinalData = output(Data, Opts, int16),
+   {next_state, connected, State#state{tid = Req#tcp_request.tid}, [{reply, _From, FinalData}]}.
+
+
 %% @doc Function to send the request and get the response.
 %% @end
--spec send_and_receive(State::#tcp_request{}) -> {ok, binary()}.
-send_and_receive(State) ->
-   Message =  generate_request(State),
-   ok = gen_tcp:send(State#tcp_request.sock, Message),
-   {ok, _Data} = get_response(State).
+-spec send_and_receive(Request::#tcp_request{}) -> {ok, binary()}.
+send_and_receive(Request) ->
+   Message =  generate_request(Request),
+   ok = gen_tcp:send(Request#tcp_request.sock, Message),
+   {ok, _Data} = get_response(Request).
 
 %% @doc Function to generate  the request message from State.
 %% @end

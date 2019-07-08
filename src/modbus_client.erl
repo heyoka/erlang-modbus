@@ -1,10 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @author heyoka
-%%% @copyright (C) 2019, TGW Logistics Group
+%%% @copyright (C) 2019
 %%% @doc
 %%%
 %%% @end
-%%% Created : 05. Jul 2019 10:28
+%%% Created : 06. Jul 2019 10:28
 %%%-------------------------------------------------------------------
 -module(modbus_client).
 
@@ -15,7 +15,7 @@
 
 -include("modbus.hrl").
 %% API
--export([start_link/0, start_link/1]).
+-export([start_link/0, start_link/1, start/1]).
 
 %% gen_statem callbacks
 -export([
@@ -54,12 +54,14 @@
 %%% API
 %%%===================================================================
 
+%% @doc start, no link
+%%
+%% @spec start(list()) -> {ok, Pid} | ignore | {error, Error}.
+start(Opts) when is_list(Opts) ->
+   gen_statem:start(?MODULE, [self(), Opts], [{timeout, ?START_TIMEOUT}]).
+
 %%--------------------------------------------------------------------
 %% @doc
-%% Creates a gen_statem process which calls Module:init/1 to
-%% initialize. To ensure a synchronized start-up procedure, this
-%% function does not return until Module:init/1 has returned.
-%%
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------

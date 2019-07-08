@@ -5,7 +5,7 @@
 
 -module(modbus).
 -export([
-	connect/3, connect/1,
+	connect/3, connect/1, connect_link/3, connect_link/1,
 	disconnect/1,
 	read_coils/3,
 	read_inputs/3,
@@ -22,21 +22,26 @@
 	write_hreg/3,
 	write_hregs/3,
 	write_memory/2,
-	write_memory/3
-]).
+	write_memory/3]).
 
 
 %%% %%% -------------------------------------------------------------------
 %% Basic Modbus functions
 %%% %%% -------------------------------------------------------------------
 
-%% @doc Function to connect with the modbus device.
+%% @doc Functions to connect with the modbus device.
 %% @end
 -spec connect(Host::string(), Port::integer(), DeviceAddr::integer()) -> {ok, pid()} | {error, term()}.
 connect(Host, Port, DeviceAddr) ->
 	connect([{host, Host}, {port, Port}, {unit_id, DeviceAddr}]).
 
 connect(Opts) when is_list(Opts) ->
+	modbus_client:start(Opts).
+
+connect_link(Host, Port, DeviceAddr) ->
+	connect_link([{host, Host}, {port, Port}, {unit_id, DeviceAddr}]).
+
+connect_link(Opts) when is_list(Opts) ->
 	modbus_client:start_link(Opts).
 
 %% @doc Function to disconnect the modbus device.

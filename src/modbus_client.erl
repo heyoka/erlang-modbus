@@ -1,19 +1,21 @@
 %%%-------------------------------------------------------------------
 %%% @author heyoka
-%%% @copyright (C) 2019, <COMPANY>
+%%% @copyright (C) 2019, TGW Logistics Group
 %%% @doc
 %%%
 %%% @end
 %%% Created : 05. Jul 2019 10:28
 %%%-------------------------------------------------------------------
 -module(modbus_client).
--author("heyoka").
+
+-author("Alexander Minichmair").
 
 -behaviour(gen_statem).
 
+
 -include("modbus.hrl").
 %% API
--export([start_link/0]).
+-export([start_link/0, start_link/1]).
 
 %% gen_statem callbacks
 -export([
@@ -29,22 +31,23 @@
 -define(SERVER, ?MODULE).
 
 
--define(TCP_OPTS, [binary, {active,false}, {packet, 0}]).
+-define(TCP_OPTS, [binary, {active,false}, {packet, 0}, {reuseaddr, true}, {nodelay, true}]).
 
--define(CONN_TIMEOUT, 3000).
+-define(START_TIMEOUT, 5000).
+-define(RECV_TIMEOUT, 10000).
 
 
--define(HANDLE_COMMON,
-   ?FUNCTION_NAME(T, C, D) -> handle_common(T, C, D)).
+%%-define(HANDLE_COMMON,
+%%   ?FUNCTION_NAME(T, C, D) -> handle_common(T, C, D)).
 
 -record(state, {
-   port = 8899           :: non_neg_integer(),
+   port = 8899          :: non_neg_integer(),
    host = "localhost"   :: inet:ip_address() | string(),
    device_address = 255 :: non_neg_integer(),
    socket               :: inet:socket(),
    reconnector          :: modbus_reconnector:reconnector(),
    recipient            :: pid(),
-   tid = 1              :: non_neg_integer()
+   tid = 1              :: 1..16#ff
 }).
 
 %%%===================================================================
@@ -61,30 +64,28 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link() ->
-   gen_statem:start_link(?MODULE, [self()], []).
+   gen_statem:start_link(?MODULE, [self(), []], []).
+start_link(Opts) when is_list(Opts) ->
+   gen_statem:start_link(?MODULE, [self(), Opts], [{timeout, ?START_TIMEOUT}]).
 
 %%%===================================================================
 %%% gen_statem callbacks
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever a gen_statem is started using gen_statem:start/[3,4] or
-%% gen_statem:start_link/[3,4], this function is called by the new
-%% process to initialize.
-%%
-%% @spec init(Args) -> {CallbackMode, StateName, State} |
-%%                     {CallbackMode, StateName, State, Actions} |
-%%                     ignore |
-%%                     {stop, StopReason}
-%% @end
-%%--------------------------------------------------------------------
-init([Recipient]) ->
+init([Recipient, Opts]) ->
    logger:set_primary_config(level, info),
    Reconnector = modbus_reconnector:new({4, 16, 5}),
-   {ok, connecting, #state{reconnector = Reconnector, recipient = Recipient},
-      [{state_timeout, 0, connect}]}.
+   State = init_opt(Opts, #state{reconnector = Reconnector, recipient = Recipient}),
+   {ok, connecting, State, [{state_timeout, 0, connect}]}.
+
+init_opt([{host, Host}|R], State) ->
+   init_opt(R, State#state{host = Host});
+init_opt([{port, Port}|R], State) ->
+   init_opt(R, State#state{port = Port});
+init_opt([{unit_id, UnitId} | R], State) ->
+   init_opt(R, State#state{device_address = UnitId});
+init_opt(_, State) ->
+   State.
 
 
 %%--------------------------------------------------------------------
@@ -113,115 +114,96 @@ format_status(_Opt, [_PDict, _StateName, _State]) ->
    Status = some_term,
    Status.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% There should be one instance of this function for each possible
-%% state name.  If callback_mode is statefunctions, one of these
-%% functions is called when gen_statem receives and event from
-%% call/2, cast/2, or as a normal process message.
-%%
-%% @spec state_name(Event, From, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Actions} |
-%%                   {stop, Reason, NewState} |
-%%    				 stop |
-%%                   {stop, Reason :: term()} |
-%%                   {stop, Reason :: term(), NewData :: data()} |
-%%                   {stop_and_reply, Reason, Replies} |
-%%                   {stop_and_reply, Reason, Replies, NewState} |
-%%                   {keep_state, NewData :: data()} |
-%%                   {keep_state, NewState, Actions} |
-%%                   keep_state_and_data |
-%%                   {keep_state_and_data, Actions}
-%% @end
-%%--------------------------------------------------------------------
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% start state functions
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 connecting(state_timeout, connect, State) ->
    logger:info("connecting ..."),
    connect(State).
 
 disconnected(info, {reconnect, timeout}, State) ->
    logger:info("reconnect_timeout in disconnected!"),
-   connect(State).
+   connect(State);
+disconnected({call, From}, _Whatever, _State) ->
+   {keep_state_and_data, [{reply, From, {error, disconnected}}]};
+disconnected(cast, stop, _State) ->
+   {stop, normal};
+disconnected(_, _, _State) ->
+   keep_state_and_data.
 
 
-%% connect
-connected(info, {tcp_closed, _Socket}, State) ->
+%% connected
+connected(info, {tcp_closed, _Socket}, State=#state{recipient = Rec}) ->
+   Rec ! {modbus, self(), disconnected},
    try_reconnect(tcp_closed, State);
+connected(info, {tcp_error, _Socket}, #state{recipient = Rec}) ->
+   Rec ! {modbus, self(), tcp_error},
+   keep_state_and_data;
 
 %%%%%%%%%%%%%%%% read functions %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-connected({call, _From}, {read_coils, _Start, Offset, _Opts} = RO, State) ->
-   Req = read_request(State, RO, ?FC_READ_COILS),
-   read_coils(Req, erlang:delete_element(1, RO), Offset, State);
+connected({call, From}, {read_coils, _Start, Offset, Opts} = RO, State) ->
+   NewState = next_tid(State),
+   Req = read_request(NewState, RO, ?FC_READ_COILS),
+   read_coils(Req, Opts, Offset, NewState, From);
 
-connected({call, _From}, {read_inputs, _Start, Offset, _Opts} = RO, State) ->
-   Req = read_request(State, RO, ?FC_READ_INPUTS),
-   read_coils(Req, erlang:delete_element(1, RO), Offset, State);
+connected({call, From}, {read_inputs, _Start, Offset, Opts} = RO, State) ->
+   NewState = next_tid(State),
+   Req = read_request(NewState, RO, ?FC_READ_INPUTS),
+   read_coils(Req, Opts, Offset, NewState, From);
 
-connected({call, _From}, {read_hregs, _Start, _Offset, Opts} = RO, State) ->
-   Req = read_request(State, RO, ?FC_READ_HREGS),
-   read_regs(Req, Opts, State);
+connected({call, From}, {read_hregs, _Start, _Offset, Opts} = RO, State) ->
+   NewState = next_tid(State),
+   Req = read_request(NewState, RO, ?FC_READ_HREGS),
+   read_regs(Req, Opts, NewState, From);
 
-connected({call, _From}, {read_iregs, _Start, _Offset, Opts} = RO, State) ->
-   Req = read_request(State, RO, ?FC_READ_HREGS),
-   read_regs(Req, Opts, State);
+connected({call, From}, {read_iregs, _Start, _Offset, Opts} = RO, State) ->
+   NewState = next_tid(State),
+   Req = read_request(NewState, RO, ?FC_READ_HREGS),
+   read_regs(Req, Opts, NewState, From);
 
 %%%%%%%%%%%% write functions %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 connected({call, From}, {write_coil, Start, Data}, State) ->
+   NewState = next_tid(State),
    <<NewData:16>> = case Data of
                        0 -> <<16#0000:16>>;
                        1 -> <<16#ff00:16>>
                     end,
-   Req = write_request(State, {write_coil, Start, NewData}, ?FC_WRITE_COIL),
-
-   {ok, NewData} = send_and_receive(Req),
-   {keep_state, State#state{tid = Req#tcp_request.tid}, [{reply, From, ok}]};
+   Req = write_request(NewState, {write_coil, Start, NewData}, ?FC_WRITE_COIL),
+   write_data(Req, NewData, NewState, From);
 
 connected({call, From}, {write_coils, _Start, Data} = RO, State) ->
-   Req = write_request(State, RO, ?FC_WRITE_COILS),
+   NewState = next_tid(State),
+   Req = write_request(NewState, RO, ?FC_WRITE_COILS),
 
    Length = if
                is_list(Data) -> length(Data);
                is_binary(Data) -> bit_size(Data)
             end,
-   {ok, Length} = send_and_receive(Req),
-   {keep_state, State#state{tid = Req#tcp_request.tid}, [{reply, From, ok}]};
+   write_data(Req, Length, NewState, From);
 
 connected({call, From}, {write_hreg, _Start, Data} = RO, State) ->
-   Req = write_request(State, RO, ?FC_WRITE_HREG),
-
-   {ok, Data} = send_and_receive(Req),
-   {keep_state, State#state{tid = Req#tcp_request.tid}, [{reply, From, ok}]};
+   NewState = next_tid(State),
+   Req = write_request(NewState, RO, ?FC_WRITE_HREG),
+   write_data(Req, Data, NewState, From);
 
 connected({call, From}, {write_hregs, _Start, Data} = RO, State) ->
-   Req = write_request(State, RO, ?FC_WRITE_HREGS),
+   NewState = next_tid(State),
+   Req = write_request(NewState, RO, ?FC_WRITE_HREGS),
 
    Length = length(Data),
-   {ok, Length} = send_and_receive(Req),
-   {keep_state, State#state{tid = Req#tcp_request.tid}, [{reply, From, ok}]}.
+   write_data(Req, Length, NewState, From);
 
-%%?HANDLE_COMMON.
+connected(cast, stop, _State) ->
+   {stop, normal}.
 
-%%connected({call, From}, _E, _State) ->
-%%   logger:notice("Unexpected call from: ~p: ~p when connected", [From, _E]),
-%%   keep_state_and_data.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% end state functions
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-handle_common({call,From}, _Event, State) ->
-   {keep_state, State, [{reply, From, {error, unsupported_call}}]}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_statem when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_statem terminates with
-%% Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, StateName, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
-terminate(_Reason, _StateName, _State) ->
-   ok.
+terminate(_Reason, _StateName, #state{socket = Sock}) ->
+   logger:notice("modbus_client disconnecting..."),
+   gen_tcp:close(Sock).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -239,10 +221,10 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 write_request(#state{socket = Sock, tid = Tid, device_address = Address}, {_Type, Start, Data}, Function) ->
-   #tcp_request{sock = Sock, tid = Tid+1, address = Address, start = Start, data = Data, function = Function}.
+   #tcp_request{sock = Sock, tid = Tid, address = Address, start = Start, data = Data, function = Function}.
 
 read_request(#state{socket = Sock, tid = Tid, device_address = Address}, {_Type, Start, Offset, _Opts}, Function) ->
-   #tcp_request{sock = Sock, tid = Tid+1, address = Address, data = Offset, start = Start, function = Function}.
+   #tcp_request{sock = Sock, tid = Tid, address = Address, data = Offset, start = Start, function = Function}.
 
 connect(State = #state{host = Host, port = Port, recipient = Rec}) ->
    logger:info("[Client: ~p] connecting to ~s:~p",[?MODULE, Host, Port]),
@@ -269,21 +251,41 @@ try_reconnect(Reason, State = #state{reconnector = Reconnector}) ->
 
 
 %%%%
-read_coils(Request, Opts, Offset, State) ->
-   {ok, Data} = send_and_receive(Request),
-   FinalData = case output(Data, Opts, coils) of
-                  Result when length(Result) > Offset ->
-                     {ResultHead, _} = lists:split(Offset, Result),
-                     ResultHead;
-                  Result -> Result
-               end,
-   {next_state, connected, State#state{tid = Request#tcp_request.tid}, [{reply, _From, FinalData}]}.
+read_coils(Request, Opts, Offset, State, From) ->
+   case send_and_receive(Request) of
+      {ok, Data} -> FinalData =
+                  case output(Data, Opts, coils) of
+                       Result when length(Result) > Offset ->
+                          {ResultHead, _} = lists:split(Offset, Result),
+                          ResultHead;
+                       Result -> Result
+                    end,
+         {keep_state, State, [{reply, From, FinalData}]};
+      {error, closed} -> gen_statem:reply(From, {error, disconnected}), try_reconnect(closed, State);
+      {error, Reason} -> {keep_state, State, [{reply, From, {error, Reason}}]}
+   end.
 
-read_regs(Req, Opts, State) ->
-   {ok, Data} = send_and_receive(Req),
-   FinalData = output(Data, Opts, int16),
-   {next_state, connected, State#state{tid = Req#tcp_request.tid}, [{reply, _From, FinalData}]}.
+read_regs(Req, Opts, State, From) ->
+   case send_and_receive(Req) of
+      {ok, Data} -> FinalData = output(Data, Opts, int16),
+         {keep_state, State, [{reply, From, FinalData}]};
+      {error, closed} -> gen_statem:reply(From, {error, disconnected}), try_reconnect(closed, State);
+      {error, Reason} -> {keep_state, State, [{reply, From, {error, Reason}}]}
+   end.
 
+write_data(Req, Expected, State, From) ->
+   case send_and_receive(Req) of
+      {ok, Expected} -> {keep_state, State, [{reply, From, ok}]};
+      {error, closed} -> gen_statem:reply(From, {error, disconnected}), try_reconnect(closed, State);
+      {error, Reason} -> {keep_state, State, [{reply, From, {error, Reason}}]}
+   end.
+
+%% handle increasing transaction-id with a size of 2 bytes
+next_tid(State = #state{tid = Tid}) when Tid >= 16#EFFF ->
+   State#state{tid = 1};
+
+next_tid(State = #state{tid = Tid}) ->
+   State#state{tid = Tid+1}.
 
 %% @doc Function to send the request and get the response.
 %% @end
@@ -291,7 +293,7 @@ read_regs(Req, Opts, State) ->
 send_and_receive(Request) ->
    Message =  generate_request(Request),
    ok = gen_tcp:send(Request#tcp_request.sock, Message),
-   {ok, _Data} = get_response(Request).
+   get_response(Request).
 
 %% @doc Function to generate  the request message from State.
 %% @end
@@ -333,32 +335,40 @@ generate_request(#tcp_request{tid = Tid, address = Address, function = Code, sta
 %% @doc Function to validate the response header and get the data from the tcp socket.
 %% @end
 -spec get_response(State::#tcp_request{}) -> ok | {error, term()}.
-get_response(#tcp_request{sock = Socket, tid = Tid, address = Address, function = Code, start = Start}) ->
-   BadCode = Code + 128,
+get_response(Req = #tcp_request{}) ->
+   case recv(Req) of
+      {ok, Data} -> {ok, Data};
+      {error, Reason} -> {error, Reason}
+   end.
 
-   case gen_tcp:recv(Socket, 0) of
-      {ok, <<Tid:16, 0:16,_TcpSize:16, Address, BadCode, ErrorCode>>} ->
-         case ErrorCode of
-            1  -> {error, illegal_function};
-            2  -> {error, illegal_data_address};
-            3  -> {error, illegal_data_value};
-            4  -> {error, slave_device_failure};
-            5  -> {error, acknowledge};
-            6  -> {error, slave_device_busy};
-            7  -> {error, negative_ack};
-            8  -> {error, memory_parity};
-            10 -> {error, path_unavailable};
-            11 -> {error, failed_to_response};
-            _  -> {error, unknown_response_code}
-         end;
-      {ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Start:16, Data:16>>} ->
-         {ok, Data};
-      {ok, <<Tid:16, 0:16,_TcpSize:16, Address, Code, Size, Data:Size/binary>>} ->
-         {ok, Data};
-      {error, closed} -> closed;
-      {error, Reason} -> {error, Reason};
-      Junk -> io:format("Junk: ~w~n", [Junk]), {error,junk}
-end.
+recv(Req) ->
+   case recv(header, Req) of
+      {ok, HeaderLength} ->
+         recv(payload, HeaderLength, Req);
+      {error,Error} ->
+         {error,Error}
+   end.
+
+recv(header, #tcp_request{tid = Tid, sock = Sock}) ->
+   case gen_tcp:recv(Sock, ?MBAP_LENGTH, ?RECV_TIMEOUT) of
+      {ok, <<Tid:16, 0:16, Len:16>>} ->
+         {ok, Len};
+      {ok, Header} ->
+         logger:error("Response cannot match request: request tid=~p, response header =~p", [Tid, Header]),
+         {error, badresp};
+      {error, Reason} ->
+         {error, Reason}
+   end.
+
+recv(payload, Len, #tcp_request{sock = Sock, function = Code, start = Start}) ->
+   BadCode = Code + 16#80,
+   case gen_tcp:recv(Sock, Len, ?RECV_TIMEOUT) of
+      {ok, <<_UnitId:8, BadCode:8, ErrorCode:8>>} -> {error, err(ErrorCode)};
+      {ok, <<_UnitId:8, Code:8, Start:16, Data:16>>} -> {ok, Data};
+      {ok, <<_UnitId:8, Code:8, Size, Payload:Size/binary>>} -> {ok, Payload};
+      {ok, <<_:8>>}      ->   {error, too_short_modbus_payload};
+      {error, Reason}    ->   {error, Reason}
+   end.
 
 
 %% @doc Function convert data to the selected output.
@@ -378,3 +388,15 @@ output(Data, Opts, Default) ->
       {binary, _} -> Data;
       _ -> Data
    end.
+
+err(<<Code:8>>) -> err(Code);
+err(1)  -> illegal_function;
+err(2)  -> illegal_data_address;
+err(3)  -> illegal_data_value;
+err(4)  -> slave_device_failure;
+err(5)  -> acknowledge;
+err(6)  -> slave_device_busy;
+err(8)  -> memory_parity_error;
+err(10) -> gateway_path_unavailable;
+err(11) -> gateway_target_device_failed_to_respond;
+err(_)  -> unknown_response_code.

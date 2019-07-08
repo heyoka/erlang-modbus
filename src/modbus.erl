@@ -5,7 +5,7 @@
 
 -module(modbus).
 -export([
-	connect/3,
+	connect/3, connect/1,
 	disconnect/1,
 	read_coils/3,
 	read_inputs/3,
@@ -25,8 +25,6 @@
 	write_memory/3
 ]).
 
--define(TIMEOUT, 3000).
-
 
 %%% %%% -------------------------------------------------------------------
 %% Basic Modbus functions
@@ -36,13 +34,16 @@
 %% @end
 -spec connect(Host::string(), Port::integer(), DeviceAddr::integer()) -> {ok, pid()} | {error, term()}.
 connect(Host, Port, DeviceAddr) ->
-	gen_server:start(modbus_device, [Host, Port, DeviceAddr],[{timeout, ?TIMEOUT}]).
+	connect([{host, Host}, {port, Port}, {unit_id, DeviceAddr}]).
+
+connect(Opts) when is_list(Opts) ->
+	modbus_client:start_link(Opts).
 
 %% @doc Function to disconnect the modbus device.
 %% @end
 -spec disconnect(Pid::pid()) -> ok.
 disconnect(Pid) ->
-	gen_server:cast(Pid, stop).
+	gen_statem:cast(Pid, stop).
 
 %% @doc Function to request coils from the modbus device.
 %% @end
@@ -54,7 +55,7 @@ read_coils(Pid, Start, Offset) ->
 %% @end
 -spec read_coils(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) -> [0|1].
 read_coils(Pid, Start, Offset, Opts) ->
-	gen_server:call(Pid, {read_coils, Start, Offset, Opts}).
+	gen_statem:call(Pid, {read_coils, Start, Offset, Opts}).
 
 %% @doc Function to request inputs from the modbus device.
 %% @end
@@ -66,7 +67,7 @@ read_inputs(Pid, Start, Offset) ->
 %% @end
 -spec read_inputs(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) -> [0|1].
 read_inputs(Pid, Start, Offset, Opts) ->
-	gen_server:call(Pid, {read_inputs, Start, Offset, Opts}).
+	gen_statem:call(Pid, {read_inputs, Start, Offset, Opts}).
 
 %% @doc Function to request holding registers from the modbus device.
 %% @end
@@ -78,7 +79,7 @@ read_hregs(Pid, Start, Offset) ->
 %% @end
 -spec read_hregs(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) ->[integer()].
 read_hregs(Pid, Start, Offset, Opts) ->
-	gen_server:call(Pid, {read_hregs, Start, Offset, Opts}).
+	gen_statem:call(Pid, {read_hregs, Start, Offset, Opts}).
 
 %% @doc Function to request input registers from the modbus device.
 %% @end
@@ -90,31 +91,31 @@ read_iregs(Pid, Start, Offset) ->
 %% @end
 -spec read_iregs(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) ->[integer()].
 read_iregs(Pid, Start, Offset, Opts) ->
-	gen_server:call(Pid, {read_iregs, Start, Offset, Opts}).
+	gen_statem:call(Pid, {read_iregs, Start, Offset, Opts}).
 
 %% @doc Function to write data on a single coil from the modbus device.
 %% @end
 -spec write_coil(Pid::pid(), Start::integer(), Value::integer()) -> term().
 write_coil(Pid, Start, Value) ->
-	gen_server:call(Pid, {write_coil, Start, Value}).
+	gen_statem:call(Pid, {write_coil, Start, Value}).
 
 %% @doc Function to write data on multiple coils from the modbus device.
 %% @end
 -spec write_coils(Pid::pid(), Start::integer(), Value::integer()) -> term().
 write_coils(Pid, Start, Value) ->
-	gen_server:call(Pid, {write_coils, Start, Value}).
+	gen_statem:call(Pid, {write_coils, Start, Value}).
 
 %% @doc Function to write data on a single register from the modbus device.
 %% @end
 -spec write_hreg(Pid::pid(), Start::integer(), Value::integer()) -> term().
 write_hreg(Pid, Start, Value) ->
-	gen_server:call(Pid, {write_hreg, Start, Value}).
+	gen_statem:call(Pid, {write_hreg, Start, Value}).
 
 %% @doc Function to write data on multiple registers from the modbus device.
 %% @end
 -spec write_hregs(Pid::pid(), Start::integer(), Value::integer()) -> term().
 write_hregs(Pid, Start, Value) ->
-	gen_server:call(Pid, {write_hregs, Start, Value}).
+	gen_statem:call(Pid, {write_hregs, Start, Value}).
 
 
 %%% %%% -------------------------------------------------------------------
@@ -126,20 +127,20 @@ write_hregs(Pid, Start, Value) ->
 -spec read_memory(Pid::pid(), string(), Offset::integer()) -> number() | [number()].
 read_memory(Pid, "%MD0." ++ PosNum, Offset) ->
 	Reg = erlang:list_to_integer(PosNum) *32,
-	gen_server:call(Pid, {read_coils, Reg, Offset*32, [{output, float32}]});
+	gen_statem:call(Pid, {read_coils, Reg, Offset*32, [{output, float32}]});
 
 read_memory(Pid, "%MW0." ++ PosNum, Offset) ->
 	Reg = erlang:list_to_integer(PosNum) *16,
-	gen_server:call(Pid, {read_coils, Reg, Offset*16, [{output, int16}]});
+	gen_statem:call(Pid, {read_coils, Reg, Offset*16, [{output, int16}]});
 
 read_memory(Pid, "%MB0." ++ PosNum, Offset) ->
 	Reg = erlang:list_to_integer(PosNum) *8,
-	gen_server:call(Pid, {read_coils, Reg, Offset*8, [{output, ascii}]});
+	gen_statem:call(Pid, {read_coils, Reg, Offset*8, [{output, ascii}]});
 
 read_memory(Pid, "%MX0." ++ PosNum, Offset) ->
 	[Word, Bit] = string:tokens(PosNum, "."),
 	Reg = erlang:list_to_integer(Word) * 8 + erlang:list_to_integer(Bit),
-	gen_server:call(Pid, {read_coils, Reg, Offset, [{output, coils}]}).
+	gen_statem:call(Pid, {read_coils, Reg, Offset, [{output, coils}]}).
 
 
 %% @doc Function to request a list of memory positions from the modbus device.
@@ -199,7 +200,7 @@ read_memory(Pid, List) ->
 			{0, 0, []} ->
 				Acc;
 			{Reg, Offset, MemList} ->
-				Data = gen_server:call(Pid, {read_coils, Reg, Offset, [{output, binary}]}),
+				Data = gen_statem:call(Pid, {read_coils, Reg, Offset, [{output, binary}]}),
 				{ResultList, _} = lists:foldl( fun(Mem, {MemAcc, DataAcc}) ->
 					case Mem of
 						"%MD0." ++ _ ->
@@ -235,20 +236,20 @@ read_memory(Pid, List) ->
 -spec write_memory(Pid::pid(), string(), Data::term()) -> number() | [number()].
 write_memory(Pid, "%MD0." ++ PosNum, Data) ->
 	Reg = erlang:list_to_integer(PosNum) *32,
-	gen_server:call(Pid, {write_coils, Reg, <<Data:32/float>>});
+	gen_statem:call(Pid, {write_coils, Reg, <<Data:32/float>>});
 
 write_memory(Pid, "%MW0." ++ PosNum, Data) ->
 	Reg = erlang:list_to_integer(PosNum) *16,
-	gen_server:call(Pid, {write_coils, Reg, <<Data:16/integer>>});
+	gen_statem:call(Pid, {write_coils, Reg, <<Data:16/integer>>});
 
 write_memory(Pid, "%MB0." ++ PosNum, Data) ->
 	Reg = erlang:list_to_integer(PosNum) *8,
-	gen_server:call(Pid, {write_coils, Reg, <<Data:8/integer>>});
+	gen_statem:call(Pid, {write_coils, Reg, <<Data:8/integer>>});
 
 write_memory(Pid, "%MX0." ++ PosNum, Data) ->
 	[Word, Bit] = string:tokens(PosNum, "."),
 	Reg = erlang:list_to_integer(Word) * 8 + erlang:list_to_integer(Bit),
-	gen_server:call(Pid, {write_coil, Reg, Data}).
+	gen_statem:call(Pid, {write_coil, Reg, Data}).
 
 
 %% @doc Function to request a list of memory positions from the modbus device.
@@ -320,7 +321,7 @@ write_memory(Pid, List) ->
 			{0, 0, <<>>} ->
 				ok;
 			{Reg, _Offset, BinAcc} ->
-				ok = gen_server:call(Pid, {write_coils, Reg, BinAcc})
+				ok = gen_statem:call(Pid, {write_coils, Reg, BinAcc})
 		end
 	end, ReqList), ok.
 

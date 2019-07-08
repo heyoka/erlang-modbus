@@ -9,5 +9,10 @@
 -define(FC_WRITE_COILS,   16#0f).
 -define(FC_WRITE_HREGS,   16#10).
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% MBAP Header
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+-define(MBAP_LENGTH, 6).
+
 %% tcp request record
 -record(tcp_request, {sock, tid = 1, address = 1, function, start, data }).

@@ -1,7 +1,5 @@
 %% available modbus functions
 
--export_type([opt_list/0]).
-
 -define(FC_READ_COILS,    16#01).
 -define(FC_READ_INPUTS,   16#02).
 -define(FC_READ_HREGS,    16#03).
@@ -18,6 +16,3 @@
 
 %% tcp request record
 -record(tcp_request, {sock, tid = 1, address = 1, function, start, data }).
-
-
--type opt_list() :: [{signed, true|false} | {output, int16|int32|float32|coils|acii|binary}].

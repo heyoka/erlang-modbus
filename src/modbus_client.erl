@@ -375,7 +375,7 @@ recv(payload, Len, #tcp_request{sock = Sock, function = Code, start = Start}) ->
 
 %% @doc Function convert data to the selected output.
 %% @end
--spec output(Data::binary(), Opts::list(), Default::atom()) -> list().
+-spec output(Data::binary(), Opts::modbus:opt_list(), Default::atom()) -> list().
 output(Data, Opts, Default) ->
    Output = proplists:get_value(output, Opts, Default),
    Signed = proplists:get_value(signed, Opts, false),

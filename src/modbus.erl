@@ -25,6 +25,9 @@
 	write_memory/3]).
 
 
+-export_type([opt_list/0]).
+-type opt_list() :: [{signed, true|false} | {output, int16|int32|float32|coils|acii|binary}].
+
 %%% %%% -------------------------------------------------------------------
 %% Basic Modbus functions
 %%% %%% -------------------------------------------------------------------
@@ -58,7 +61,7 @@ read_coils(Pid, Start, Offset) ->
 
 %% @doc Function to request coils from the modbus device.
 %% @end
--spec read_coils(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) -> [0|1].
+-spec read_coils(Pid::pid(), Start::integer(), Offset::integer(), Opts::opt_list()) -> [0|1].
 read_coils(Pid, Start, Offset, Opts) ->
 	gen_statem:call(Pid, {read_coils, Start, Offset, Opts}).
 
@@ -70,7 +73,7 @@ read_inputs(Pid, Start, Offset) ->
 
 %% @doc Function to request inputs from the modbus device.
 %% @end
--spec read_inputs(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) -> [0|1].
+-spec read_inputs(Pid::pid(), Start::integer(), Offset::integer(), Opts::opt_list()) -> [0|1].
 read_inputs(Pid, Start, Offset, Opts) ->
 	gen_statem:call(Pid, {read_inputs, Start, Offset, Opts}).
 
@@ -82,7 +85,7 @@ read_hregs(Pid, Start, Offset) ->
 
 %% @doc Function to request holding registers from the modbus device.
 %% @end
--spec read_hregs(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) ->[integer()].
+-spec read_hregs(Pid::pid(), Start::integer(), Offset::integer(), Opts::opt_list()) ->[integer()].
 read_hregs(Pid, Start, Offset, Opts) ->
 	gen_statem:call(Pid, {read_hregs, Start, Offset, Opts}).
 
@@ -94,7 +97,7 @@ read_iregs(Pid, Start, Offset) ->
 
 %% @doc Function to request input registers from the modbus device.
 %% @end
--spec read_iregs(Pid::pid(), Start::integer(), Offset::integer(), Opts::list()) ->[integer()].
+-spec read_iregs(Pid::pid(), Start::integer(), Offset::integer(), Opts::opt_list()) ->[integer()].
 read_iregs(Pid, Start, Offset, Opts) ->
 	gen_statem:call(Pid, {read_iregs, Start, Offset, Opts}).
 

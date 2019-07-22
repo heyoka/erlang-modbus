@@ -92,7 +92,7 @@ init_opt([{min_interval, Min} | R], State) when is_integer(Min) ->
 init_opt([{max_interval, Max} | R], State) when is_integer(Max) ->
    init_opt(R, State#state{
       reconnector = modbus_reconnector:set_max_interval(State#state.reconnector, Max)});
-init_opt([{max_retries, Retries} | R], State) when is_integer(Retries)->
+init_opt([{max_retries, Retries} | R], State) when is_integer(Retries) orelse Retries =:= infinity ->
    init_opt(R, State#state{
       reconnector = modbus_reconnector:set_max_retries(State#state.reconnector, Retries)});
 init_opt(_, State) ->

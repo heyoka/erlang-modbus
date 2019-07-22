@@ -8,7 +8,8 @@
 
 -author('miae@tgw-group.com').
 
--export([new/0, new/1, execute/2, reset/1]).
+-export([new/0, new/1, execute/2, reset/1,
+   set_min_interval/2, set_max_interval/2, set_max_retries/2]).
 
 %% 4 seconds
 -define(MIN_INTERVAL, 4).
@@ -57,6 +58,19 @@ new({MinInterval, MaxInterval, MaxRetries}) when is_integer(MinInterval),
                  interval     = MinInterval,
                  max_interval = MaxInterval,
                  max_retries  = MaxRetries}.
+
+
+-spec set_min_interval(#reconnector{}, non_neg_integer()) -> #reconnector{}.
+set_min_interval(R = #reconnector{}, NewMinInterval) ->
+   R#reconnector{min_interval = NewMinInterval}.
+
+-spec set_max_interval(#reconnector{}, non_neg_integer()) -> #reconnector{}.
+set_max_interval(R = #reconnector{}, NewMaxInterval) ->
+   R#reconnector{max_interval = NewMaxInterval}.
+
+-spec set_max_retries(#reconnector{}, non_neg_integer()) -> #reconnector{}.
+set_max_retries(R = #reconnector{}, NewMaxRetries) ->
+   R#reconnector{max_retries = NewMaxRetries}.
 
 %%------------------------------------------------------------------------------
 %% @doc Execute reconnector.

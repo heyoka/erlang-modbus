@@ -2,7 +2,7 @@
 %%% @author heyoka
 %%% @copyright (C) 2019
 %%% @doc
-%%%
+%%% rewrite of modbus_device as a gen_statem process with configurable reconnecting
 %%% @end
 %%% Created : 06. Jul 2019 10:28
 %%%-------------------------------------------------------------------
@@ -86,6 +86,15 @@ init_opt([{port, Port}|R], State) ->
    init_opt(R, State#state{port = Port});
 init_opt([{unit_id, UnitId} | R], State) ->
    init_opt(R, State#state{device_address = UnitId});
+init_opt([{min_interval, Min} | R], State) when is_integer(Min) ->
+   init_opt(R, State#state{
+      reconnector = modbus_reconnector:set_min_interval(State#state.reconnector, Min)});
+init_opt([{max_interval, Max} | R], State) when is_integer(Max) ->
+   init_opt(R, State#state{
+      reconnector = modbus_reconnector:set_max_interval(State#state.reconnector, Max)});
+init_opt([{max_retries, Retries} | R], State) when is_integer(Retries)->
+   init_opt(R, State#state{
+      reconnector = modbus_reconnector:set_max_retries(State#state.reconnector, Retries)});
 init_opt(_, State) ->
    State.
 
@@ -203,9 +212,11 @@ connected(cast, stop, _State) ->
 %% end state functions
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+terminate(_Reason, _StateName, #state{socket = undefined}) ->
+   logger:notice("modbus_client shutdown ...");
 terminate(_Reason, _StateName, #state{socket = Sock}) ->
-   logger:notice("modbus_client disconnecting..."),
-   gen_tcp:close(Sock).
+   logger:notice("modbus_client disconnecting and shutdown ..."),
+   catch gen_tcp:close(Sock).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -235,7 +246,7 @@ connect(State = #state{host = Host, port = Port, recipient = Rec}) ->
          %% tell recipient we are connected
          Rec ! {modbus, self(), connected},
          {next_state, connected, State#state{socket = Socket}};
-      {error, Reason} -> logger:warning("[Client: ~p] connect error to: ~p" ,[?MODULE, {Host, Port}]),
+      {error, Reason} -> logger:warning("[Client: ~p] connect error to: ~p Reason: ~p" ,[?MODULE, {Host, Port}, Reason]),
          try_reconnect(Reason, State)
    end.
 

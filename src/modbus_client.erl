@@ -170,7 +170,7 @@ connected({call, From}, {read_hregs, _Start, _Offset, Opts} = RO, State) ->
 
 connected({call, From}, {read_iregs, _Start, _Offset, Opts} = RO, State) ->
    NewState = next_tid(State),
-   Req = read_request(NewState, RO, ?FC_READ_HREGS),
+   Req = read_request(NewState, RO, ?FC_READ_IREGS),
    read_regs(Req, Opts, NewState, From);
 
 %%%%%%%%%%%% write functions %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

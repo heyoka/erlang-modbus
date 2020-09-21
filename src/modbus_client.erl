@@ -49,13 +49,15 @@
 %%   ?FUNCTION_NAME(T, C, D) -> handle_common(T, C, D)).
 
 -record(state, {
-   port = 8899          :: non_neg_integer(),
-   host = "localhost"   :: inet:ip_address() | string(),
-   device_address = 255 :: non_neg_integer(),
-   socket               :: inet:socket(),
-   reconnector          :: modbus_reconnector:reconnector(),
-   recipient            :: pid(),
-   tid = 1              :: 1..16#ff
+   port = 8899             :: non_neg_integer(),
+   host = "localhost"      :: inet:ip_address() | string(),
+   device_address = 255    :: non_neg_integer(),
+   socket                  :: inet:socket(),
+   reconnector             :: modbus_reconnector:reconnector(),
+   recipient               :: pid(),
+   tid = 1                 :: 1..16#ff,
+   %% manual keep-alive, in case peer does not recognize tcp-keepalive
+   keep_connected = 20000  :: false | non_neg_integer()
 }).
 
 %%%===================================================================
@@ -84,7 +86,7 @@ start_link(Opts) when is_list(Opts) ->
 
 init([Recipient, Opts]) ->
    logger:set_primary_config(level, info),
-   Reconnector = modbus_reconnector:new({4, 16, 5}),
+   Reconnector = modbus_reconnector:new({4, 16}),
    State = init_opt(Opts, #state{reconnector = Reconnector, recipient = Recipient}),
    {ok, connecting, State, [{state_timeout, 0, connect}]}.
 
@@ -92,6 +94,8 @@ init_opt([{host, Host}|R], State) ->
    init_opt(R, State#state{host = Host});
 init_opt([{port, Port}|R], State) ->
    init_opt(R, State#state{port = Port});
+init_opt([{keep_connected, Time}|R], State) ->
+   init_opt(R, State#state{keep_connected = Time});
 init_opt([{unit_id, UnitId} | R], State) ->
    init_opt(R, State#state{device_address = UnitId});
 init_opt([{min_interval, Min} | R], State) when is_integer(Min) ->
@@ -159,6 +163,20 @@ connected(info, {tcp_closed, _Socket}, State=#state{recipient = Rec}) ->
 connected(info, {tcp_error, _Socket}, #state{recipient = Rec}) ->
    Rec ! {modbus, self(), tcp_error},
    keep_state_and_data;
+
+connected(timeout, _What, State=#state{keep_connected = Timeout}) ->
+   logger:warning("keep_connected timeout (~p) !!!", [_What]),
+   NewState = next_tid(State),
+   Req = read_request(NewState, {read_hregs, 2701, 2, []}, ?FC_READ_HREGS),
+   case send_and_receive(Req) of
+      {ok, _Data} ->
+         logger:notice("yes, keep-connected request worked"),
+         {keep_state, State, Timeout};
+      {error, closed} -> try_reconnect(closed, State);
+      {error, Reason} ->
+         logger:error("other Error reading manual keep-connected: ~p",[Reason]),
+         {keep_state, State, Timeout}
+   end;
 
 %%%%%%%%%%%%%%%% read functions %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 connected({call, From}, {read_coils, _Start, Offset, Opts} = RO, State) ->
@@ -247,13 +265,13 @@ write_request(#state{socket = Sock, tid = Tid, device_address = Address}, {_Type
 read_request(#state{socket = Sock, tid = Tid, device_address = Address}, {_Type, Start, Offset, _Opts}, Function) ->
    #tcp_request{sock = Sock, tid = Tid, address = Address, data = Offset, start = Start, function = Function}.
 
-connect(State = #state{host = Host, port = Port, recipient = Rec}) ->
+connect(State = #state{host = Host, port = Port, recipient = Rec, keep_connected = Timeout}) ->
    logger:info("[Client: ~p] connecting to ~s:~p",[?MODULE, Host, Port]),
    case gen_tcp:connect(Host, Port, ?TCP_OPTS) of
       {ok, Socket} ->
          %% tell recipient we are connected
          Rec ! {modbus, self(), connected},
-         {next_state, connected, State#state{socket = Socket}};
+         {next_state, connected, State#state{socket = Socket}, [Timeout]};
       {error, Reason} -> logger:warning("[Client: ~p] connect error to: ~p Reason: ~p" ,[?MODULE, {Host, Port}, Reason]),
          try_reconnect(Reason, State)
    end.
@@ -272,7 +290,7 @@ try_reconnect(Reason, State = #state{reconnector = Reconnector}) ->
 
 
 %%%%
-read_coils(Request, Opts, Offset, State, From) ->
+read_coils(Request, Opts, Offset, State = #state{keep_connected = Timeout}, From) ->
    case send_and_receive(Request) of
       {ok, Data} -> FinalData =
                   case output(Data, Opts, coils) of
@@ -281,24 +299,24 @@ read_coils(Request, Opts, Offset, State, From) ->
                           ResultHead;
                        Result -> Result
                     end,
-         {keep_state, State, [{reply, From, FinalData}]};
+         {keep_state, State, [{reply, From, FinalData}, Timeout]};
       {error, closed} -> gen_statem:reply(From, {error, disconnected}), try_reconnect(closed, State);
-      {error, Reason} -> {keep_state, State, [{reply, From, {error, Reason}}]}
+      {error, Reason} -> {keep_state, State, [{reply, From, {error, Reason}}, Timeout]}
    end.
 
-read_regs(Req, Opts, State, From) ->
+read_regs(Req, Opts, State = #state{keep_connected = Timeout}, From) ->
    case send_and_receive(Req) of
       {ok, Data} -> FinalData = output(Data, Opts, int16),
-         {keep_state, State, [{reply, From, FinalData}]};
+         {keep_state, State, [{reply, From, FinalData}, Timeout]};
       {error, closed} -> gen_statem:reply(From, {error, disconnected}), try_reconnect(closed, State);
-      {error, Reason} -> {keep_state, State, [{reply, From, {error, Reason}}]}
+      {error, Reason} -> {keep_state, State, [{reply, From, {error, Reason}}, Timeout]}
    end.
 
-write_data(Req, Expected, State, From) ->
+write_data(Req, Expected, State = #state{keep_connected = Timeout}, From) ->
    case send_and_receive(Req) of
-      {ok, Expected} -> {keep_state, State, [{reply, From, ok}]};
+      {ok, Expected} -> {keep_state, State, [{reply, From, ok}, Timeout]};
       {error, closed} -> gen_statem:reply(From, {error, disconnected}), try_reconnect(closed, State);
-      {error, Reason} -> {keep_state, State, [{reply, From, {error, Reason}}]}
+      {error, Reason} -> {keep_state, State, [{reply, From, {error, Reason}}, Timeout]}
    end.
 
 %% handle increasing transaction-id with a size of 2 bytes

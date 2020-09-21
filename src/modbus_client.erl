@@ -31,7 +31,15 @@
 -define(SERVER, ?MODULE).
 
 
--define(TCP_OPTS, [binary, {active,false}, {packet, 0}, {reuseaddr, true}, {nodelay, true}]).
+
+-define(TCP_OPTS, [
+   binary,
+   {active,false},
+   {packet, 0},
+   {reuseaddr, true},
+   {nodelay, true},
+   {keepalive, true}
+]).
 
 -define(START_TIMEOUT, 5000).
 -define(RECV_TIMEOUT, 10000).

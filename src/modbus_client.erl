@@ -53,7 +53,7 @@
    host = "localhost"   :: inet:ip_address() | string(),
    device_address = 255 :: non_neg_integer(),
    socket               :: inet:socket(),
-   reconnector          :: modbus_reconnector:reconnector(),
+   reconnector          :: modbus_backoff:reconnector(),
    recipient            :: pid(),
    tid = 1              :: 1..16#ff
 }).
@@ -84,7 +84,7 @@ start_link(Opts) when is_list(Opts) ->
 
 init([Recipient, Opts]) ->
    logger:set_primary_config(level, info),
-   Reconnector = modbus_reconnector:new({4, 16, 5}),
+   Reconnector = modbus_backoff:new({100, 3000}),
    State = init_opt(Opts, #state{reconnector = Reconnector, recipient = Recipient}),
    {ok, connecting, State, [{state_timeout, 0, connect}]}.
 
@@ -96,13 +96,13 @@ init_opt([{unit_id, UnitId} | R], State) ->
    init_opt(R, State#state{device_address = UnitId});
 init_opt([{min_interval, Min} | R], State) when is_integer(Min) ->
    init_opt(R, State#state{
-      reconnector = modbus_reconnector:set_min_interval(State#state.reconnector, Min)});
+      reconnector = modbus_backoff:set_min_interval(State#state.reconnector, Min)});
 init_opt([{max_interval, Max} | R], State) when is_integer(Max) ->
    init_opt(R, State#state{
-      reconnector = modbus_reconnector:set_max_interval(State#state.reconnector, Max)});
+      reconnector = modbus_backoff:set_max_interval(State#state.reconnector, Max)});
 init_opt([{max_retries, Retries} | R], State) when is_integer(Retries) orelse Retries =:= infinity ->
    init_opt(R, State#state{
-      reconnector = modbus_reconnector:set_max_retries(State#state.reconnector, Retries)});
+      reconnector = modbus_backoff:set_max_retries(State#state.reconnector, Retries)});
 init_opt(_, State) ->
    State.
 
@@ -262,7 +262,7 @@ try_reconnect(Reason, State = #state{reconnector = undefined}) ->
    {stop, {shutdown, Reason}, State};
 try_reconnect(Reason, State = #state{reconnector = Reconnector}) ->
    logger:info("[Client: ~p] try reconnecting...",[?MODULE]),
-   case modbus_reconnector:execute(Reconnector, {reconnect, timeout}) of
+   case modbus_backoff:execute(Reconnector, {reconnect, timeout}) of
       {ok, Reconnector1} ->
          {next_state, disconnected, State#state{reconnector = Reconnector1}};
       {stop, Error} -> logger:error("[Client: ~p] reconnect error: ~p!",[?MODULE, Error]),
